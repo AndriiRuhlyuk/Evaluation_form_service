@@ -2,7 +2,6 @@ from rest_framework import viewsets, filters
 from django_filters.rest_framework import DjangoFilterBackend
 
 from techstack.models import TechStack
-from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from techstack.serializers import TechStackSerializer, TechStackListSerializer
 
@@ -50,7 +49,7 @@ class TechStackViewSet(viewsets.ModelViewSet):
             OpenApiParameter(
                 name="search",
                 type=str,
-                description="Search by name or description (ex. ?search=python)",
+                description="Search by name (ex. ?search=python)",
             ),
             OpenApiParameter(
                 name="is_active",

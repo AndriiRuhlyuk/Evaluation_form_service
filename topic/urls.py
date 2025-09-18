@@ -1,11 +1,11 @@
 from rest_framework import routers
 from django.urls import path, include
-from techstack.views import TechStackViewSet
+from topic.views import TopicViewSet
 
 
-app_name = "techstack"
+app_name = "topic"
 router = routers.DefaultRouter()
 
-router.register("", TechStackViewSet, basename="techstack")
+router.register("", TopicViewSet, basename="topic")
 
 urlpatterns = [path("", include(router.urls))]
