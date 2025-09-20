@@ -22,4 +22,5 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/techstacks/", include("techstack.urls", namespace="techstack")),
     path("api/topics/", include("topic.urls", namespace="topic")),
+    path("api/questions/", include("question.urls", namespace="question")),
 ]
