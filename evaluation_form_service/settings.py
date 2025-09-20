@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     "drf_spectacular",
     "techstack",
     "topic",
+    "question",
 ]
 
 MIDDLEWARE = [
