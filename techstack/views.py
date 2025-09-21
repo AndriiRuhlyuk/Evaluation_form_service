@@ -31,6 +31,7 @@ class TechStackViewSet(viewsets.ModelViewSet):
     - `PUT /api/techstacks/{id}/` - Update tech stack completely
     - `PATCH /api/techstacks/{id}/` - Update tech stack partially
     - `DELETE /api/techstacks/{id}/` - Soft delete tech stack
+    - `POST /api/techstacks/{id}/restore/` - Restore unactive techstack
     """
 
     queryset = TechStack.objects.all()

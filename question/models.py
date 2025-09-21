@@ -5,6 +5,7 @@ from topic.models import Topic
 
 
 class Question(models.Model):
+    """Question model"""
 
     class QuestionDifficulty(models.IntegerChoices):
         EASY = 1, "Easy"
