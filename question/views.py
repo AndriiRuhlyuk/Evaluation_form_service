@@ -15,11 +15,33 @@ from question.serializers import (
 
 
 class QuestionPagination(PageNumberPagination):
+    """Pagination class for Question API"""
+
     page_size = 10
     max_page_size = 100
 
 
 class QuestionViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing questions used in candidate evaluation forms.
+
+    **Features:**
+    - Full CRUD operations
+    - Search by question text
+    - Filter by name of topics, question difficulty, source and active status
+    - Soft delete functionality
+    - Different serializers for list vs detail views
+
+    **Endpoints:**
+    - `GET /api/questions/` - List active Questions
+    - `POST /api/questions/` - Create new Question
+    - `GET /api/questions/{id}/` - Get Question details (full view)
+    - `PUT /api/questions/{id}/` - Update Question completely
+    - `PATCH /api/questions/{id}/` - Update Question partially
+    - `DELETE /api/questions/{id}/` - Soft delete topic
+    - `POST /api/questions/{id}/restore/` - Restore unactive question
+    """
+
     queryset = Question.objects.select_related("topic", "question_author").order_by(
         "topic", "-difficulty", "created_at"
     )
