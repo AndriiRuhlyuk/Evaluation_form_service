@@ -22,7 +22,8 @@ class Question(models.Model):
         choices=QuestionDifficulty.choices,
         default=QuestionDifficulty.EASY,
     )
-    source = models.TextField(
+    source = models.CharField(
+        max_length=25,
         choices=QuestionSource.choices,
         default=QuestionSource.TEMPLATE,
     )
@@ -57,3 +58,8 @@ class Question(models.Model):
         """Increase question usage."""
         self.usage_count += 1
         self.save(update_fields=["usage_count"])
+
+    def __str__(self):
+        if len(self.question_text) > 75:
+            return f"{self.question_text[:75]}..."
+        return self.question_text

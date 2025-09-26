@@ -56,6 +56,7 @@ class QuestionViewSet(viewsets.ModelViewSet):
         filters.OrderingFilter,
     )
     filterset_fields = {
+        "topic": ["exact"],
         "topic__name": ["icontains"],
         "difficulty": ["exact"],
         "source": ["exact"],

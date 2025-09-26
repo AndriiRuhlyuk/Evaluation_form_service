@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     "employee",
     "rest_framework_simplejwt",
     "question",
+    "template_form",
 ]
 
 MIDDLEWARE = [
