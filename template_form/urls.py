@@ -11,6 +11,6 @@ items_router = routers.NestedSimpleRouter(router, r"", lookup="form")
 items_router.register(r"items", TemplateFormItemViewSet, basename="form-items")
 
 urlpatterns = [
-    path("", include(router.urls)),
     path("", include(items_router.urls)),
+    path("", include(router.urls)),
 ]

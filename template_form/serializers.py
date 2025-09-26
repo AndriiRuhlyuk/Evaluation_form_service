@@ -106,15 +106,37 @@ class TemplateFormListSerializer(serializers.ModelSerializer):
     tech_stack = serializers.StringRelatedField()
     topics_count = serializers.IntegerField(source="topics.count", read_only=True)
     items_count = serializers.SerializerMethodField()
+    form_detail_url = serializers.SerializerMethodField()
 
     class Meta:
         model = TemplateForm
-        fields = ("id", "name", "tech_stack", "topics_count", "items_count")
+        fields = (
+            "id",
+            "name",
+            "tech_stack",
+            "topics_count",
+            "items_count",
+            "form_detail_url",
+        )
 
     def get_items_count(self, instance):
         """Count only active items."""
 
         return instance.items.filter(is_removed=False).count()
+
+    def get_form_detail_url(self, instance):
+        """
+        Generate URL for item detail view.
+        """
+
+        request = self.context.get("request")
+        if not request:
+            return None
+
+        kwargs = {"slug": instance.slug}
+        view_name = "template_form:template-form-detail"
+
+        return request.build_absolute_uri(reverse(view_name, kwargs=kwargs))
 
 
 class TemplateFormItemsListSerializer(serializers.ModelSerializer):
@@ -138,7 +160,7 @@ class TemplateFormItemsListSerializer(serializers.ModelSerializer):
         if not request:
             return None
 
-        kwargs = {"form_pk": instance.form.pk, "pk": instance.pk}
+        kwargs = {"form_slug": instance.form.slug, "pk": instance.pk}
         view_name = "template_form:form-items-detail"
 
         return request.build_absolute_uri(reverse(view_name, kwargs=kwargs))

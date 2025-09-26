@@ -15,6 +15,8 @@ from template_form.services import _synchronize_form_topics
 class TemplateFormViewSet(viewsets.ModelViewSet):
     queryset = TemplateForm.objects.prefetch_related("items")
 
+    lookup_field = "slug"
+
     def get_serializer_class(self):
         if self.action == "list":
             return TemplateFormListSerializer
@@ -41,7 +43,7 @@ class TemplateFormItemViewSet(viewsets.ModelViewSet):
         """
         Queryset elements filtered by TemplateForm
         """
-        return TemplateFormItems.objects.filter(form_id=self.kwargs["form_pk"])
+        return TemplateFormItems.objects.filter(form__slug=self.kwargs["form_slug"])
 
     def get_serializer_class(self):
         if self.action in ["update", "partial_update"]:

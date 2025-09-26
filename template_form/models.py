@@ -2,6 +2,7 @@ from django.db import models
 from django.contrib.auth.models import User
 
 from techstack.models import TechStack
+from django.utils.text import slugify
 from topic.models import Topic
 
 
@@ -16,11 +17,20 @@ class BaseForm(models.Model):
         TechStack, on_delete=models.PROTECT, related_name="forms"
     )
     topics = models.ManyToManyField(Topic, related_name="template_forms", blank=True)
+    slug = models.SlugField(max_length=500, blank=True, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         abstract = True
+
+    def save(self, *args, **kwargs):
+        """
+        Generate Slug (name field) before saving
+        """
+        if not self.slug:
+            self.slug = slugify(self.name)
+        super().save(*args, **kwargs)
 
 
 class TemplateForm(BaseForm):
