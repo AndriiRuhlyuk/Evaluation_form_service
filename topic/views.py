@@ -6,6 +6,8 @@ from rest_framework.permissions import IsAdminUser, AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from topic.permissions import IsEmployee
 
+from question.models import Question
+from question.serializers import QuestionSerializer
 from topic.models import Topic
 from topic.serializers import (
     TopicSerializer,
@@ -80,6 +82,31 @@ class TopicViewSet(viewsets.ModelViewSet):
         """Soft delete: mark as inactive instead of actual deletion"""
         instance.is_active = False
         instance.save()
+
+    @action(detail=True, methods=["get"])
+    def recommended_questions(self, request, pk=None):
+        """
+        Action for recommended questions for fill TemplateForm
+        base on filtering by:
+        - topic
+        - including in current form template
+        - active status (is_active=True)
+        """
+        topic = self.get_object()
+
+        question_queryset = Question.objects.filter(topic=topic, is_active=True)
+
+        form_slug_to_exclude = request.query_params.get("exclude_form")
+        if form_slug_to_exclude:
+            used_question_ids = question_queryset.values_list(
+                "origin_question_id", flat=True
+            )
+            question_queryset = question_queryset.exclude(id__in=used_question_ids)
+
+        question_queryset = question_queryset.order_by("-usage_count")
+
+        serializer = QuestionSerializer(question_queryset, many=True)
+        return Response(serializer.data)
 
     @extend_schema(
         summary="Restore inactive topic",

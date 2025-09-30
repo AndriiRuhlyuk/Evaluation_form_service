@@ -1,5 +1,15 @@
-from rest_framework import viewsets
+from django.contrib import messages
+from django.contrib.admin.views.decorators import staff_member_required
+from django.http import JsonResponse
+from django.shortcuts import render, get_object_or_404, redirect
+from django.urls import reverse
+from django.utils.safestring import mark_safe
+from django.views.decorators.http import require_POST
+from django_filters.rest_framework import DjangoFilterBackend
+from drf_spectacular.utils import extend_schema, OpenApiParameter
+from rest_framework import viewsets, filters
 
+from question.models import Question
 from template_form.models import TemplateForm, TemplateFormItems
 from template_form.serializers import (
     TemplateFormListSerializer,
@@ -10,10 +20,41 @@ from template_form.serializers import (
     TemplateFormItemUpdateSerializer,
 )
 from template_form.services import _synchronize_form_topics
+from topic.models import Topic
 
 
 class TemplateFormViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing TemplateForm.
+
+    **Features:**
+    - Full CRUD operations
+    - Search by TemplateForm name
+    - Filter by name of topics, topics and techstack
+    - Different serializers for list vs detail views
+
+    **Endpoints:**
+    - `GET /api/template-form/` - List active TemplateForm
+    - `POST /api/template-form/` - Create new TemplateForm
+    - `GET /api/template-form/{slug}/` - Get TemplateForm details
+    - `PUT /api/template-form/{slug}/` - Update TemplateForm completely
+    - `PATCH /api/template-form/{slug}/` - Update TemplateForm partially
+    - `DELETE /api/template-form/{slug}/` - Soft delete TemplateForm
+    """
+
     queryset = TemplateForm.objects.prefetch_related("items")
+    filter_backends = [
+        DjangoFilterBackend,
+        filters.SearchFilter,
+        filters.OrderingFilter,
+    ]
+    filterset_fields = {
+        "tech_stack": ["exact"],
+        "tech_stack__name": ["icontains"],
+        "topics": ["exact"],
+    }
+    search_fields = ["name"]
+    ordering_fields = ["created_at"]
 
     lookup_field = "slug"
 
@@ -30,12 +71,76 @@ class TemplateFormViewSet(viewsets.ModelViewSet):
         """
         return {"request": self.request}
 
+    @extend_schema(
+        summary="List of template forms",
+        description="Get list of template forms with comprehensive filtering, search and ordering options",
+        parameters=[
+            OpenApiParameter(
+                name="search",
+                type=str,
+                description="Search by template forms name (ex. ?search=Java Engineer)",
+            ),
+            OpenApiParameter(
+                name="tech_stack",
+                type=str,
+                description="Filter by technical stack (ex. ?tech_stack=Java)",
+            ),
+            OpenApiParameter(
+                name="tech_stack__name",
+                type=str,
+                description="Filter by technical stack name icontaints (ex. ?source=Jav)",
+            ),
+            OpenApiParameter(
+                name="topics",
+                type=str,
+                description="Filter by topic (ex. ?topics=DB)",
+            ),
+            OpenApiParameter(
+                name="ordering",
+                type=str,
+                description="Order by: created_at,-created_at",
+            ),
+        ],
+        tags=["Question"],
+    )
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
 
 class TemplateFormItemViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing items element inside TemplateForm
-    URL: /template-form/{form_pk}/items/{item_pk}/
+
+    **Features:**
+    - Full CRUD operations
+    - Search by TemplateFormItem text snapshot
+    - Filter by name of topic_snapshot, topic_snapshot, source_snapshot and is_removed
+    - Different serializers for list vs detail views
+
+    **Endpoints:**
+    - `GET /api/template-form/items/` - List active TemplateFormItems
+    - `GET /api/template-form/{slug}/items/{item_pk}/`` - Get TemplateFormItems details
+    - `PUT /api/template-form/{slug}/items/{item_pk}/`` - Update TemplateFormItems completely
+    - `PATCH /api/template-form/{slug}/items/{item_pk}/`` - Update TemplateFormItems partially
+    - `DELETE /api/template-form/{slug}/items/{item_pk}/` - Soft delete TemplateFormItems instance
     """
+
+    queryset = TemplateFormItems.objects.prefetch_related("items")
+    filter_backends = [
+        DjangoFilterBackend,
+        filters.SearchFilter,
+        filters.OrderingFilter,
+    ]
+    filterset_fields = {
+        "is_removed": ["exact"],
+        "source_snapshot": ["exact"],
+        "topic_snapshot": ["exact"],
+    }
+    search_fields = ["text_snapshot", "origin_question__question_text"]
+    ordering_fields = [
+        "difficulty_snapshot",
+        "created_at",
+    ]
 
     serializer_class = TemplateFormItemsListSerializer
 
@@ -63,3 +168,81 @@ class TemplateFormItemViewSet(viewsets.ModelViewSet):
 
         instance.is_removed = True
         instance.save()
+
+    @extend_schema(
+        summary="List of template forms items",
+        description="Get list of template form items with comprehensive filtering, search and ordering options",
+        parameters=[
+            OpenApiParameter(
+                name="search",
+                type=str,
+                description="Search by snapshot text question (ex. ?text_snapshot=What is the dependency injection?)",
+            ),
+            OpenApiParameter(
+                name="search",
+                type=str,
+                description="Search by origin question text question (ex. ?origin_question__question_text=What is)",
+            ),
+            OpenApiParameter(
+                name="topic_snapshot",
+                type=str,
+                description="Filter by topic snapshot (ex. ?topic_snapshot=ORM)",
+            ),
+            OpenApiParameter(
+                name="source_snapshot",
+                type=str,
+                description="Filter by source of question snapshot (ex. ?source=TEMPLATE)",
+            ),
+            OpenApiParameter(
+                name="is_removed",
+                type=bool,
+                description="Filter by active status (ex. ?is_removed=false)",
+            ),
+            OpenApiParameter(
+                name="ordering",
+                type=str,
+                description="Order by: created_at, -created_at, difficulty_snapshot, -difficulty_snapshot",
+            ),
+        ],
+        tags=["Question"],
+    )
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
+
+@staff_member_required
+@require_POST
+def ajax_sync_form_topics(request, form_slug):
+    """
+    Take full list of Topic IDs, update M2M relation
+    and return updated HTML for recommendation block
+    """
+
+    try:
+        form_instance = TemplateForm.objects.get(slug=form_slug)
+        topic_ids = request.POST.getlist("topic_ids[]")
+
+        form_instance.topics.set(topic_ids)
+        links = []
+
+        for tpc in form_instance.topics.all().order_by("name"):
+            url = reverse(
+                "template_form:recommend-questions",
+                kwargs={"form_slug": form_instance.slug, "topic_id": tpc.id},
+            )
+            links.append(
+                f'<li><a href="{url}" target="_blank">Рекомендовані питання: {tpc.name}</a></li>'
+            )
+
+        recommendations_html = (
+            mark_safe("<ul>" + "".join(links) + "</ul>")
+            if links
+            else "No topics for recommendations."
+        )
+
+        return JsonResponse(
+            {"status": "ok", "recommendations_html": recommendations_html}
+        )
+
+    except Exception as e:
+        return JsonResponse({"status": "error", "message": str(e)}, status=500)

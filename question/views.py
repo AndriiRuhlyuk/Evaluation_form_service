@@ -40,8 +40,8 @@ class QuestionViewSet(viewsets.ModelViewSet):
     - `GET /api/questions/{id}/` - Get Question details (full view)
     - `PUT /api/questions/{id}/` - Update Question completely
     - `PATCH /api/questions/{id}/` - Update Question partially
-    - `DELETE /api/questions/{id}/` - Soft delete topic
-    - `POST /api/questions/{id}/restore/` - Restore unactive question
+    - `DELETE /api/questions/{id}/` - Soft delete Question
+    - `POST /api/questions/{id}/restore/` - Restore unactive Question
     """
 
     queryset = Question.objects.select_related("topic", "question_author").order_by(

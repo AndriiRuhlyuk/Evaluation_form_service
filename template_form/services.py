@@ -39,29 +39,28 @@ def _ensure_tech_stacks(tech_stack_data):
         )
 
 
-def _ensure_topics(items_data: list[dict]) -> dict[str, Topic]:
+def _ensure_single_topic(topic_data: dict) -> Topic:
     """
-    Take all topic names and create Topic instances.
-    :return: dict {name: TopicObject}
+    Find or create single topic
     """
-    topic_names = set()
-    for item in items_data:
-        topic_info = item.get("topic")
-        if topic_info and topic_info.get("name"):
-            topic_names.add(topic_info["name"])
 
-    if not topic_names:
-        return {}
+    topic_id = topic_data.get("id")
+    topic_name = topic_data.get("name")
 
-    Topic.objects.bulk_create(
-        [Topic(name=name) for name in topic_names], ignore_conflicts=True
-    )
-    topics_in_db = Topic.objects.filter(name__in=topic_names)
-    return {topic.name: topic for topic in topics_in_db}
+    if topic_id:
+        try:
+            return Topic.objects.get(id=topic_id)
+        except Topic.DoesNotExist:
+            raise serializers.ValidationError(f"Topic with id={topic_id} not found.")
+
+    if topic_name:
+        topic, _ = Topic.objects.get_or_create(name=topic_name)
+        return topic
+    raise serializers.ValidationError("Topic data must contain 'id' or 'name'.")
 
 
 def _get_or_create_questions(
-    items_data: list, user: User, topics_map: dict
+    items_data: list, user: User, topic_obj: Topic
 ) -> dict[int, Question]:
     """
     Gets existing and creates new questions from `items_data`.
@@ -80,13 +79,6 @@ def _get_or_create_questions(
             item_indices_for_existing_questions[q_id] = index
 
         else:
-            topic_name = item["topic"]["name"]
-            topic_obj = topics_map.get(topic_name)
-            if not topic_obj:
-                raise serializers.ValidationError(
-                    f"Could not find or create topic: {topic_name}"
-                )
-
             new_questions_to_create.append(
                 Question(
                     question_text=item["question_text"],
@@ -138,14 +130,20 @@ def _create_snapshots(
         TemplateFormItems.objects.bulk_create(snapshots_to_create)
 
 
-def _process_and_create_items(form: TemplateForm, user: User, items_data: list):
-    """An orchestrator that calls all the helper functions to create nested objects."""
-    if not items_data:
+def _process_topics_and_questions(form: TemplateForm, user: User, topic_data: list):
+    """
+    An orchestrator that iterate by topics, and
+    for every topic take question
+    """
+    if not topic_data:
         return
 
-    topics_map = _ensure_topics(items_data)
-    all_questions_map = _get_or_create_questions(items_data, user, topics_map)
-    _create_snapshots(form, user, all_questions_map)
+    for topic_group in topic_data:
+        topic_obj = _ensure_single_topic(topic_group["topic"])
+        questions_data = topic_group["questions"]
+
+        all_questions_map = _get_or_create_questions(questions_data, user, topic_obj)
+        _create_snapshots(form, user, all_questions_map)
 
 
 def _synchronize_form_topics(form: TemplateForm):
@@ -169,15 +167,14 @@ def _synchronize_form_topics(form: TemplateForm):
 def create_template_form(manager: User, validated_data: dict) -> TemplateForm:
     """Create TemplateForm with all nested objects"""
 
-    items_data = validated_data.pop("items", [])
-
+    topics_data = validated_data.pop("topics_with_questions", [])
     tech_stack = _ensure_tech_stacks(validated_data.pop("tech_stack"))
 
     template_form = TemplateForm.objects.create(
         manager=manager, tech_stack=tech_stack, **validated_data
     )
 
-    _process_and_create_items(template_form, manager, items_data)
+    _process_topics_and_questions(template_form, manager, topics_data)
     _synchronize_form_topics(template_form)
 
     return template_form
@@ -191,21 +188,22 @@ def update_template_form(
 ) -> TemplateForm:
     """Update TemplateForm with all nested objects using 'soft replace' logic."""
 
-    items_data = validated_data.pop("items", None)
+    topics_data = validated_data.pop("topics_with_questions", None)
     instance.name = validated_data.get("name", instance.name)
     if "tech_stack" in validated_data:
         instance.tech_stack = _ensure_tech_stacks(validated_data["tech_stack"])
     instance.save()
 
-    if items_data is None:
+    if topics_data is None:
         return instance
 
-    incoming_question_ids = {
-        item["origin_question"] for item in items_data if "origin_question" in item
-    }
+    incoming_question_ids = set()
+    for topic_group in topics_data:
+        for question_data in topic_group["questions"]:
+            if "origin_question" in question_data:
+                incoming_question_ids.add(question_data["origin_question"])
 
     existing_items = instance.items.all().select_related("origin_question")
-    # ВИПРАВЛЕНО: створюємо словник {question_id: item_object}
     existing_items_map = {
         item.origin_question.id: item for item in existing_items if item.origin_question
     }
@@ -216,24 +214,34 @@ def update_template_form(
             is_removed=True
         )
 
-    new_items_to_process = []
     items_to_reactivate_ids = []
+    new_topic_groups_to_process = []
 
-    for item_data in items_data:
-        question_id = item_data.get("origin_question")
+    for topic_group in topics_data:
+        new_questions_for_this_topic = []
+        for question_data in topic_group["questions"]:
+            question_id = question_data.get("origin_question")
 
-        if question_id in existing_items_map:
-            existing_item = existing_items_map[question_id]
-            if existing_item.is_removed:
-                items_to_reactivate_ids.append(existing_item.id)
-        else:
-            new_items_to_process.append(item_data)
+            if question_id and question_id in existing_items_map:
+                existing_item = existing_items_map[question_id]
+                if existing_item.is_removed:
+                    items_to_reactivate_ids.append(existing_item.id)
+            else:
+                new_questions_for_this_topic.append(question_data)
+
+        if new_questions_for_this_topic:
+            new_topic_groups_to_process.append(
+                {
+                    "topic": topic_group["topic"],
+                    "questions": new_questions_for_this_topic,
+                }
+            )
 
     if items_to_reactivate_ids:
         instance.items.filter(id__in=items_to_reactivate_ids).update(is_removed=False)
 
-    if new_items_to_process:
-        _process_and_create_items(instance, manager, new_items_to_process)
+    if new_topic_groups_to_process:
+        _process_topics_and_questions(instance, manager, new_topic_groups_to_process)
 
     _synchronize_form_topics(instance)
 

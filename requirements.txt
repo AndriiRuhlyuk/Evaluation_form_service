@@ -8,6 +8,7 @@ click==8.2.1
 Django==5.2.6
 django-debug-toolbar==6.0.0
 django-filter==25.1
+django-nested-admin==4.1.4
 djangorestframework==3.16.1
 djangorestframework_simplejwt==5.5.1
 dotenv==0.9.9
@@ -32,6 +33,7 @@ pycodestyle==2.14.0
 pyflakes==3.4.0
 PyJWT==2.10.1
 python-dotenv==1.1.1
+python-monkey-business==1.1.0
 PyYAML==6.0.2
 referencing==0.36.2
 rpds-py==0.27.1

@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     "debug_toolbar",
     "django_filters",
     "drf_spectacular",
+    "nested_admin",
     "techstack",
     "topic",
     "employee",

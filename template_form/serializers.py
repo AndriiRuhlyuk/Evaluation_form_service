@@ -1,3 +1,5 @@
+from collections import defaultdict
+
 from django.urls import reverse
 from rest_framework import serializers
 
@@ -64,7 +66,6 @@ class InputTemplateFormItemSerializer(serializers.Serializer):
     origin_question = serializers.IntegerField(required=False)
     question_text = serializers.CharField(required=False)
     difficulty = serializers.IntegerField(required=False)
-    topic = InputTopicSerializer(required=False)
 
     def validate(self, data):
         is_existing = "origin_question" in data
@@ -76,18 +77,29 @@ class InputTemplateFormItemSerializer(serializers.Serializer):
         return data
 
 
+class TopicWithQuestionsInputSerializer(serializers.Serializer):
+    """
+    Validate structure one 'item'-s in input list: { topic: {...}, questions: [...].
+    """
+
+    topic = InputTopicSerializer()
+    questions = InputTemplateFormItemSerializer(many=True, min_length=1)
+
+
 class TemplateFormSerializer(serializers.ModelSerializer):
     """
     Serializer for CREATE & UPDATE Template Form (Create/Update).
     Validate and Pass input data to service.py
     """
 
-    items = InputTemplateFormItemSerializer(many=True, required=False, write_only=True)
+    topics_with_questions = TopicWithQuestionsInputSerializer(
+        many=True, required=True, write_only=True
+    )
     tech_stack = TechStackRelatedField(queryset=TechStack.objects.all())
 
     class Meta:
         model = TemplateForm
-        fields = ("id", "name", "tech_stack", "items")
+        fields = ("id", "name", "tech_stack", "topics_with_questions")
 
     def create(self, validated_data):
         manager = self.context["request"].user
@@ -220,8 +232,7 @@ class TemplateFormDetailSerializer(serializers.ModelSerializer):
     """DETAIL TemplateForm Serializer."""
 
     tech_stack = serializers.StringRelatedField(read_only=True)
-    topics = TopicSerializer(many=True, read_only=True)
-    items = serializers.SerializerMethodField()
+    topics_with_questions = serializers.SerializerMethodField()
     manager = serializers.StringRelatedField(read_only=True)
 
     class Meta:
@@ -231,8 +242,7 @@ class TemplateFormDetailSerializer(serializers.ModelSerializer):
             "name",
             "manager",
             "tech_stack",
-            "topics",
-            "items",
+            "topics_with_questions",
             "created_at",
         )
 
@@ -243,3 +253,29 @@ class TemplateFormDetailSerializer(serializers.ModelSerializer):
         return TemplateFormItemsListSerializer(
             active_items, many=True, context=self.context
         ).data
+
+    def get_topics_with_questions(self, instance):
+        """
+        Take active questions and group it by topic
+        """
+        active_items = instance.items.filter(is_removed=False).select_related(
+            "origin_question__topic"
+        )
+        grouped_items = defaultdict(list)
+        for item in active_items:
+            if item.origin_question and item.origin_question.topic:
+                topic = item.origin_question.topic
+                grouped_items[topic].append(item)
+
+        result = []
+        for topic, items_list in grouped_items.items():
+            result.append(
+                {
+                    "topic": TopicSerializer(topic, context=self.context).data,
+                    "questions": TemplateFormItemsListSerializer(
+                        items_list, many=True, context=self.context
+                    ).data,
+                }
+            )
+
+        return result

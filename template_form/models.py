@@ -16,7 +16,9 @@ class BaseForm(models.Model):
     tech_stack = models.ForeignKey(
         TechStack, on_delete=models.PROTECT, related_name="forms"
     )
-    topics = models.ManyToManyField(Topic, related_name="template_forms", blank=True)
+    topics = models.ManyToManyField(
+        Topic, through="FormTopic", related_name="template_forms", blank=True
+    )
     slug = models.SlugField(max_length=500, blank=True, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -43,11 +45,11 @@ class TemplateForm(BaseForm):
 class BaseFormItems(models.Model):
     """Base abstract model for all forms items"""
 
-    text_snapshot = models.TextField()
-    difficulty_snapshot = models.IntegerField()
-    source_snapshot = models.CharField(max_length=25)
-    topic_snapshot = models.CharField(max_length=125)
-    max_score_snapshot = models.IntegerField()
+    text_snapshot = models.TextField(blank=True, null=True)
+    difficulty_snapshot = models.IntegerField(blank=True, null=True)
+    source_snapshot = models.CharField(max_length=25, blank=True, null=True)
+    topic_snapshot = models.CharField(max_length=125, blank=True, null=True)
+    max_score_snapshot = models.IntegerField(blank=True, null=True)
 
     origin_question = models.ForeignKey(
         "question.Question",
@@ -79,13 +81,53 @@ class BaseFormItems(models.Model):
             "topic_snapshot",
         )
 
+    def save(self, *args, **kwargs):
+        if self.origin_question and not self.pk:
+            if not self.text_snapshot:
+                self.text_snapshot = self.origin_question.question_text
+            if not self.difficulty_snapshot:
+                self.difficulty_snapshot = self.origin_question.difficulty
+            if not self.source_snapshot:
+                self.source_snapshot = self.origin_question.source
+            if not self.topic_snapshot and self.origin_question.topic:
+                self.topic_snapshot = self.origin_question.topic.name
+            if not self.max_score_snapshot:
+                self.max_score_snapshot = self.origin_question.max_score
+        super().save(*args, **kwargs)
+
+
+class FormTopic(models.Model):
+    """Through-model for M2M"""
+
+    form = models.ForeignKey(
+        TemplateForm, on_delete=models.CASCADE, related_name="form_topics"
+    )
+    topic = models.ForeignKey(
+        Topic, on_delete=models.PROTECT, related_name="form_topics"
+    )
+
+    class Meta:
+        unique_together = ("form", "topic")
+
+    def __str__(self):
+        return f"{self.form.name} - {self.topic.name}"
+
 
 class TemplateFormItems(BaseFormItems):
     """Model for Template Form Item"""
 
-    form = models.ForeignKey(
-        TemplateForm, on_delete=models.CASCADE, related_name="items"
+    form_topic = models.ForeignKey(
+        FormTopic,
+        on_delete=models.CASCADE,
+        related_name="items",
     )
 
+    @property
+    def form(self):
+        return self.form_topic.form
+
+    class Meta:
+        verbose_name_plural = "Template Form Items"
+
     def __str__(self):
-        return f"[{self.form.name}] {self.text_snapshot[:60]}..."
+        return f"[{self.form_topic.topic.name}] {self.text_snapshot[:60]}..."
