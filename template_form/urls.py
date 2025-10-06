@@ -9,7 +9,7 @@ app_name = "template_form"
 router = routers.SimpleRouter()
 router.register(r"", views.TemplateFormViewSet, basename="template-form")
 
-items_router = routers.NestedSimpleRouter(router, r"", lookup="form")
+items_router = routers.NestedSimpleRouter(router, r"", lookup="form_topic__form")
 items_router.register(r"items", views.TemplateFormItemViewSet, basename="form-items")
 
 urlpatterns = [

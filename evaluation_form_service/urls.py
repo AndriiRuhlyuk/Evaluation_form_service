@@ -16,6 +16,7 @@ Including another URLconf
 """
 
 from django.contrib import admin
+import nested_admin
 from django.urls import path, include
 from django.conf import settings
 from drf_spectacular.views import (
@@ -24,13 +25,17 @@ from drf_spectacular.views import (
     SpectacularRedocView,
 )
 
+from template_form.services import get_question_details
+
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/techstacks/", include("techstack.urls", namespace="techstack")),
     path("api/topics/", include("topic.urls", namespace="topic")),
     path("api/employees/", include(("employee.urls", "employee"), "employee")),
     path("api/questions/", include("question.urls", namespace="question")),
-    path("api/template-form/", include("template_form.urls", namespace="template-form")),
+    path(
+        "api/template-form/", include("template_form.urls", namespace="template-form")
+    ),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path(
         "api/doc/swagger/",
@@ -41,6 +46,12 @@ urlpatterns = [
         "api/doc/redoc/",
         SpectacularRedocView.as_view(url_name="schema"),
         name="redoc",
+    ),
+    path("_nested_admin/", include("nested_admin.urls")),
+    path(
+        "api/question-details/<int:pk>/",
+        get_question_details,
+        name="get_question_details",
     ),
 ]
 

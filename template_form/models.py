@@ -81,20 +81,6 @@ class BaseFormItems(models.Model):
             "topic_snapshot",
         )
 
-    def save(self, *args, **kwargs):
-        if self.origin_question and not self.pk:
-            if not self.text_snapshot:
-                self.text_snapshot = self.origin_question.question_text
-            if not self.difficulty_snapshot:
-                self.difficulty_snapshot = self.origin_question.difficulty
-            if not self.source_snapshot:
-                self.source_snapshot = self.origin_question.source
-            if not self.topic_snapshot and self.origin_question.topic:
-                self.topic_snapshot = self.origin_question.topic.name
-            if not self.max_score_snapshot:
-                self.max_score_snapshot = self.origin_question.max_score
-        super().save(*args, **kwargs)
-
 
 class FormTopic(models.Model):
     """Through-model for M2M"""
@@ -103,7 +89,7 @@ class FormTopic(models.Model):
         TemplateForm, on_delete=models.CASCADE, related_name="form_topics"
     )
     topic = models.ForeignKey(
-        Topic, on_delete=models.PROTECT, related_name="form_topics"
+        Topic, on_delete=models.CASCADE, related_name="form_topics"
     )
 
     class Meta:
@@ -129,5 +115,45 @@ class TemplateFormItems(BaseFormItems):
     class Meta:
         verbose_name_plural = "Template Form Items"
 
+    def save(self, *args, **kwargs):
+        """
+        Recalculate max_score_snapshot before saving if difficulty_snapshot is set.
+        """
+
+        if self.form_topic and self.form_topic.topic:
+            self.topic_snapshot = self.form_topic.topic.name
+
+        if self.origin_question:
+
+            self.source_snapshot = self.origin_question.source
+            if not self.text_snapshot:
+                self.text_snapshot = self.origin_question.question_text
+
+            if self.difficulty_snapshot is None:
+                self.difficulty_snapshot = self.origin_question.difficulty
+
+        if self.difficulty_snapshot:
+
+            self.max_score_snapshot = self.difficulty_snapshot * 3
+        else:
+
+            self.max_score_snapshot = None
+
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"[{self.form_topic.topic.name}] {self.text_snapshot[:60]}..."
+
+
+class ReadOnlyTemplateForm(TemplateForm):
+    class Meta:
+        proxy = True
+        verbose_name = "Template Form (Read-Only)"
+        verbose_name_plural = "Template Forms (Read-Only)"
+
+
+class ReadOnlyFormTopic(FormTopic):
+    class Meta:
+        proxy = True
+        verbose_name = "Form Topic (Read-Only)"
+        verbose_name_plural = "Form Topics (Read-Only)"

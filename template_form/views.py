@@ -1,15 +1,10 @@
-from django.contrib import messages
-from django.contrib.admin.views.decorators import staff_member_required
-from django.http import JsonResponse
-from django.shortcuts import render, get_object_or_404, redirect
-from django.urls import reverse
-from django.utils.safestring import mark_safe
-from django.views.decorators.http import require_POST
+from django.db.models import Count, Q
+
+
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from rest_framework import viewsets, filters
 
-from question.models import Question
 from template_form.models import TemplateForm, TemplateFormItems
 from template_form.serializers import (
     TemplateFormListSerializer,
@@ -20,7 +15,6 @@ from template_form.serializers import (
     TemplateFormItemUpdateSerializer,
 )
 from template_form.services import _synchronize_form_topics
-from topic.models import Topic
 
 
 class TemplateFormViewSet(viewsets.ModelViewSet):
@@ -42,7 +36,19 @@ class TemplateFormViewSet(viewsets.ModelViewSet):
     - `DELETE /api/template-form/{slug}/` - Soft delete TemplateForm
     """
 
-    queryset = TemplateForm.objects.prefetch_related("items")
+    queryset = (
+        TemplateForm.objects.select_related("tech_stack", "manager")
+        .prefetch_related(
+            "topics",
+            "form_topics__topic",
+            "form_topics__items__origin_question",
+        )
+        .annotate(
+            active_items_count=Count(
+                "form_topics__items", filter=Q(form_topics__items__is_removed=False)
+            )
+        )
+    )
     filter_backends = [
         DjangoFilterBackend,
         filters.SearchFilter,
@@ -125,7 +131,9 @@ class TemplateFormItemViewSet(viewsets.ModelViewSet):
     - `DELETE /api/template-form/{slug}/items/{item_pk}/` - Soft delete TemplateFormItems instance
     """
 
-    queryset = TemplateFormItems.objects.prefetch_related("items")
+    queryset = TemplateFormItems.objects.select_related(
+        "form_topic__form", "form_topic__topic", "origin_question", "added_by"
+    )
     filter_backends = [
         DjangoFilterBackend,
         filters.SearchFilter,
@@ -148,7 +156,10 @@ class TemplateFormItemViewSet(viewsets.ModelViewSet):
         """
         Queryset elements filtered by TemplateForm
         """
-        return TemplateFormItems.objects.filter(form__slug=self.kwargs["form_slug"])
+        base_queryset = super().get_queryset()
+        return base_queryset.filter(
+            form_topic__form__slug=self.kwargs["form_topic__form_slug"]
+        )
 
     def get_serializer_class(self):
         if self.action in ["update", "partial_update"]:
@@ -161,7 +172,7 @@ class TemplateFormItemViewSet(viewsets.ModelViewSet):
         """
 
         instance = serializer.save()
-        _synchronize_form_topics(instance.form)
+        _synchronize_form_topics(instance.form_topic.form)
 
     def perform_destroy(self, instance):
         """Soft-delete"""
@@ -208,41 +219,3 @@ class TemplateFormItemViewSet(viewsets.ModelViewSet):
     )
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
-
-
-@staff_member_required
-@require_POST
-def ajax_sync_form_topics(request, form_slug):
-    """
-    Take full list of Topic IDs, update M2M relation
-    and return updated HTML for recommendation block
-    """
-
-    try:
-        form_instance = TemplateForm.objects.get(slug=form_slug)
-        topic_ids = request.POST.getlist("topic_ids[]")
-
-        form_instance.topics.set(topic_ids)
-        links = []
-
-        for tpc in form_instance.topics.all().order_by("name"):
-            url = reverse(
-                "template_form:recommend-questions",
-                kwargs={"form_slug": form_instance.slug, "topic_id": tpc.id},
-            )
-            links.append(
-                f'<li><a href="{url}" target="_blank">Рекомендовані питання: {tpc.name}</a></li>'
-            )
-
-        recommendations_html = (
-            mark_safe("<ul>" + "".join(links) + "</ul>")
-            if links
-            else "No topics for recommendations."
-        )
-
-        return JsonResponse(
-            {"status": "ok", "recommendations_html": recommendations_html}
-        )
-
-    except Exception as e:
-        return JsonResponse({"status": "error", "message": str(e)}, status=500)

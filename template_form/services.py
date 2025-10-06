@@ -1,16 +1,18 @@
 from django.db import transaction
+from django.http import JsonResponse
+from django.shortcuts import get_object_or_404
 
 from question.models import Question
 from rest_framework import serializers
 from techstack.models import TechStack
 from django.contrib.auth.models import User
-from template_form.models import TemplateForm, TemplateFormItems
+from template_form.models import TemplateForm, TemplateFormItems, FormTopic
 from topic.models import Topic
 
 
 def _ensure_tech_stacks(tech_stack_data):
     """
-    Take or create TechStack
+    Take or create TechStack and return instance.
     """
     if isinstance(tech_stack_data, TechStack):
 
@@ -107,30 +109,33 @@ def _get_or_create_questions(
 
 
 def _create_snapshots(
-    form: TemplateForm, user: User, all_questions_map: dict[int, Question]
+    form_topic: FormTopic, user: User, all_questions_map: dict[int, Question]
 ):
     """
     Create instances TemplateFormItems (snapshots)
     """
     snapshots_to_create = []
     for item_index, origin_question in all_questions_map.items():
+        max_score = (
+            origin_question.difficulty * 3 if origin_question.difficulty else None
+        )
         snapshots_to_create.append(
             TemplateFormItems(
-                form=form,
+                form_topic=form_topic,
                 added_by=user,
                 origin_question=origin_question,
                 text_snapshot=origin_question.question_text,
                 difficulty_snapshot=origin_question.difficulty,
                 source_snapshot=origin_question.source,
                 topic_snapshot=origin_question.topic.name,
-                max_score_snapshot=origin_question.max_score,
+                max_score_snapshot=max_score,
             )
         )
     if snapshots_to_create:
         TemplateFormItems.objects.bulk_create(snapshots_to_create)
 
 
-def _process_topics_and_questions(form: TemplateForm, user: User, topic_data: list):
+def process_topics_and_questions(form: TemplateForm, user: User, topic_data: list):
     """
     An orchestrator that iterate by topics, and
     for every topic take question
@@ -140,10 +145,13 @@ def _process_topics_and_questions(form: TemplateForm, user: User, topic_data: li
 
     for topic_group in topic_data:
         topic_obj = _ensure_single_topic(topic_group["topic"])
+        form_topic, created = FormTopic.objects.get_or_create(
+            form=form, topic=topic_obj
+        )
         questions_data = topic_group["questions"]
 
         all_questions_map = _get_or_create_questions(questions_data, user, topic_obj)
-        _create_snapshots(form, user, all_questions_map)
+        _create_snapshots(form_topic, user, all_questions_map)
 
 
 def _synchronize_form_topics(form: TemplateForm):
@@ -153,7 +161,7 @@ def _synchronize_form_topics(form: TemplateForm):
     """
 
     active_topic_ids = set(
-        TemplateFormItems.objects.filter(form=form, is_removed=False)
+        TemplateFormItems.objects.filter(form_topic__form=form, is_removed=False)
         .values_list("origin_question__topic_id", flat=True)
         .distinct()
     )
@@ -174,7 +182,7 @@ def create_template_form(manager: User, validated_data: dict) -> TemplateForm:
         manager=manager, tech_stack=tech_stack, **validated_data
     )
 
-    _process_topics_and_questions(template_form, manager, topics_data)
+    process_topics_and_questions(template_form, manager, topics_data)
     _synchronize_form_topics(template_form)
 
     return template_form
@@ -203,7 +211,9 @@ def update_template_form(
             if "origin_question" in question_data:
                 incoming_question_ids.add(question_data["origin_question"])
 
-    existing_items = instance.items.all().select_related("origin_question")
+    existing_items = TemplateFormItems.objects.filter(
+        form_topic__form=instance
+    ).select_related("origin_question")
     existing_items_map = {
         item.origin_question.id: item for item in existing_items if item.origin_question
     }
@@ -238,11 +248,32 @@ def update_template_form(
             )
 
     if items_to_reactivate_ids:
-        instance.items.filter(id__in=items_to_reactivate_ids).update(is_removed=False)
+        instance.form_topics.items.filter(id__in=items_to_reactivate_ids).update(
+            is_removed=False
+        )
 
     if new_topic_groups_to_process:
-        _process_topics_and_questions(instance, manager, new_topic_groups_to_process)
+        process_topics_and_questions(instance, manager, new_topic_groups_to_process)
 
     _synchronize_form_topics(instance)
 
     return instance
+
+
+def get_question_details(request, pk):
+    """
+    :return question data in JSON format for autofill in Admin Panel.
+    """
+    if not request.user.is_staff:
+        return JsonResponse({"error": "Permission denied"}, status=403)
+
+    question = get_object_or_404(Question, pk=pk)
+
+    data = {
+        "text_snapshot": question.question_text,
+        "difficulty_snapshot": question.difficulty,
+        "source_snapshot": question.source,
+        "topic_snapshot": question.topic.name if question.topic else "",
+        "max_score_snapshot": question.max_score,
+    }
+    return JsonResponse(data)

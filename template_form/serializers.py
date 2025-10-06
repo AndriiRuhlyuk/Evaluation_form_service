@@ -16,7 +16,8 @@ from .services import (
 class TopicSerializer(serializers.ModelSerializer):
     """
     Serializer for a Topic.
-    It is used as nested inside TemplateFormSerializer
+    It is used as nested inside TemplateFormDetailSerializer
+    for group questions by topic (get_topics_with_questions)
     """
 
     class Meta:
@@ -27,6 +28,7 @@ class TopicSerializer(serializers.ModelSerializer):
 class TechStackRelatedField(serializers.RelatedField):
     """
     Serializer for custom field - TechStack (ID, dict, str).
+    Call _ensure_tech_stacks for take TechStack instance.
     """
 
     def to_internal_value(self, data):
@@ -43,7 +45,7 @@ class TechStackRelatedField(serializers.RelatedField):
 class InputTopicSerializer(serializers.Serializer):
     """
     Validate data for topic inside item.
-    It is used as nested inside InputTemplateFormItemSerializer
+    It is used as nested inside TopicWithQuestionsInputSerializer
     """
 
     id = serializers.IntegerField(required=False)
@@ -60,7 +62,7 @@ class InputTopicSerializer(serializers.Serializer):
 class InputTemplateFormItemSerializer(serializers.Serializer):
     """
     Validate structure one 'item'-s in input list.
-    It is used as nested inside TemplateFormSerializer
+    It is used as nested inside TopicWithQuestionsInputSerializer
     """
 
     origin_question = serializers.IntegerField(required=False)
@@ -69,7 +71,7 @@ class InputTemplateFormItemSerializer(serializers.Serializer):
 
     def validate(self, data):
         is_existing = "origin_question" in data
-        is_new = all(k in data for k in ["question_text", "difficulty", "topic"])
+        is_new = all(k in data for k in ["question_text", "difficulty"])
         if not is_existing and not is_new:
             raise serializers.ValidationError(
                 "Provide either 'origin_question' or full data for a new question."
@@ -89,7 +91,9 @@ class TopicWithQuestionsInputSerializer(serializers.Serializer):
 class TemplateFormSerializer(serializers.ModelSerializer):
     """
     Serializer for CREATE & UPDATE Template Form (Create/Update).
-    Validate and Pass input data to service.py
+    Validate internal serializer - TopicWithQuestionsInputSerializer
+    Pass validated data to service.py (create_template_form / update_template_form)
+    for crete/update Template Form instance.
     """
 
     topics_with_questions = TopicWithQuestionsInputSerializer(
@@ -117,7 +121,7 @@ class TemplateFormListSerializer(serializers.ModelSerializer):
 
     tech_stack = serializers.StringRelatedField()
     topics_count = serializers.IntegerField(source="topics.count", read_only=True)
-    items_count = serializers.SerializerMethodField()
+    items_count = serializers.IntegerField(source="active_items_count", read_only=True)
     form_detail_url = serializers.SerializerMethodField()
 
     class Meta:
@@ -130,11 +134,6 @@ class TemplateFormListSerializer(serializers.ModelSerializer):
             "items_count",
             "form_detail_url",
         )
-
-    def get_items_count(self, instance):
-        """Count only active items."""
-
-        return instance.items.filter(is_removed=False).count()
 
     def get_form_detail_url(self, instance):
         """
@@ -172,8 +171,11 @@ class TemplateFormItemsListSerializer(serializers.ModelSerializer):
         if not request:
             return None
 
-        kwargs = {"form_slug": instance.form.slug, "pk": instance.pk}
         view_name = "template_form:form-items-detail"
+        kwargs = {
+            "form_topic__form_slug": instance.form_topic.form.slug,
+            "pk": instance.pk,
+        }
 
         return request.build_absolute_uri(reverse(view_name, kwargs=kwargs))
 
@@ -220,13 +222,6 @@ class TemplateFormItemUpdateSerializer(serializers.ModelSerializer):
             )
         return value
 
-    def update(self, instance, validated_data):
-        if "difficulty_snapshot" in validated_data:
-            difficulty = validated_data["difficulty_snapshot"]
-            instance.max_score_snapshot = difficulty * 3
-
-        return super().update(instance, validated_data)
-
 
 class TemplateFormDetailSerializer(serializers.ModelSerializer):
     """DETAIL TemplateForm Serializer."""
@@ -246,29 +241,25 @@ class TemplateFormDetailSerializer(serializers.ModelSerializer):
             "created_at",
         )
 
-    def get_items(self, instance):
-        """Filter items by is_removed=False"""
-
-        active_items = instance.items.filter(is_removed=False)
-        return TemplateFormItemsListSerializer(
-            active_items, many=True, context=self.context
-        ).data
-
     def get_topics_with_questions(self, instance):
         """
-        Take active questions and group it by topic
+        Group prefetched active questions by topics
         """
-        active_items = instance.items.filter(is_removed=False).select_related(
-            "origin_question__topic"
-        )
         grouped_items = defaultdict(list)
-        for item in active_items:
-            if item.origin_question and item.origin_question.topic:
-                topic = item.origin_question.topic
-                grouped_items[topic].append(item)
+
+        for form_topic in instance.form_topics.all():
+            for item in form_topic.items.all():
+
+                if not item.is_removed:
+
+                    grouped_items[form_topic.topic].append(item)
+
+        sorted_grouped_items = dict(
+            sorted(grouped_items.items(), key=lambda x: x[0].name)
+        )
 
         result = []
-        for topic, items_list in grouped_items.items():
+        for topic, items_list in sorted_grouped_items.items():
             result.append(
                 {
                     "topic": TopicSerializer(topic, context=self.context).data,

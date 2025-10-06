@@ -1,311 +1,299 @@
-# template_form/admin.py
-# Повна версія файлу admin.py з усіма виправленнями.
-# - Використання django-nested-admin для вкладених inlines.
-# - Групування Items по топіках через FormTopicInline.
-# - Виправлення RelatedObjectDoesNotExist: перевірки на obj.topic_id перед доступом до topic.
-# - М'яке видалення, фільтрація origin_question по топіку.
-# - Оновлені list_filter, fieldsets без 'topics'.
-# - Поле 'manager' прибрано з fieldsets і додано до readonly_fields, щоб не можна було вибирати/змінювати.
-# - Авто-заповнення снепшотів з origin_question перенесено в model save (без JS).
-
-from collections import defaultdict
 from django.contrib import admin
-from django.contrib.admin.utils import quote
-from django.forms.models import BaseInlineFormSet
-from django.utils.safestring import mark_safe
+from django.utils.html import strip_tags
+from django.db import models, transaction
 from django.urls import reverse
-import nested_admin
-from .models import TemplateForm, FormTopic, TemplateFormItems
+from django.utils.html import format_html
+from unfold.admin import ModelAdmin, TabularInline, StackedInline
+from unfold.contrib.forms.widgets import WysiwygWidget
+
 from question.models import Question
+from .models import (
+    TemplateForm,
+    FormTopic,
+    TemplateFormItems,
+    ReadOnlyTemplateForm,
+    ReadOnlyFormTopic,
+)
+from .services import process_topics_and_questions
 
 
-class SoftDeleteInlineFormSet(BaseInlineFormSet):
+# --- INLINES ---
+
+
+class TemplateFormItemsInline(TabularInline):
     """
-    Кастомний formset для м'якого видалення в inline.
-    Замість жорсткого видалення, встановлює is_removed=True.
-    """
-
-    def delete_existing(self, obj, commit=True):
-        if commit:
-            obj.is_removed = True
-            obj.save()
-
-
-class TemplateFormItemsInline(nested_admin.NestedTabularInline):
-    """
-    Inline для TemplateFormItems, вкладений в FormTopic.
-    - Фільтрований origin_question до Питань з поточного топіка (рекомендовані).
-    - Додавання нових Items тільки в цей топік.
-    - Редаговані снепшоти, м'яке видалення.
+    Inline for snapshots, that  represented on TemplateFormAdmin page.
+    Use AJAX-request to js-helper for autocomplete fields:
+    - text_snapshot
+    - difficulty_snapshot
+    that call service.get_question_details()
     """
 
     model = TemplateFormItems
-    extra = 1
-    formset = SoftDeleteInlineFormSet
+    extra = 0
     fields = (
         "origin_question",
         "text_snapshot",
         "difficulty_snapshot",
-        "topic_snapshot",
-        "max_score_snapshot",
-        "source_snapshot",
         "is_removed",
-        "added_by",
-        "created_at",
     )
-    readonly_fields = (
-        "topic_snapshot",
-        "max_score_snapshot",
-        "source_snapshot",
-        "added_by",
-        "created_at",
-    )
-    ordering = ("difficulty_snapshot",)
+
+    readonly_fields = ("topic_snapshot", "source_snapshot", "max_score_snapshot")
+    autocomplete_fields = ("origin_question",)
 
     def get_queryset(self, request):
-        qs = super().get_queryset(request)
-        return qs.filter(is_removed=False)
+        queryset = super().get_queryset(request)
 
-    def get_formset(self, request, obj=None, **kwargs):
-        # obj тут - це FormTopic
-        if (
-            obj and obj.topic_id
-        ):  # Перевірка на topic_id, щоб уникнути RelatedObjectDoesNotExist
-
-            class CustomInlineForm(self.form):
-                def __init__(self, *args, **kwargs):
-                    super().__init__(*args, **kwargs)
-                    # Фільтрація origin_question до питань з цього топіка
-                    self.fields["origin_question"].queryset = Question.objects.filter(
-                        topic_id=obj.topic_id
-                    )
-
-            kwargs["form"] = CustomInlineForm
-        return super().get_formset(request, obj, **kwargs)
-
-    def has_delete_permission(self, request, obj=None):
-        return True  # Чекбокс для м'якого видалення
+        return queryset.filter(is_removed=False)
 
 
-class FormTopicInline(nested_admin.NestedTabularInline):
-    """
-    Inline для FormTopic, вкладений в TemplateForm.
-    - Дозволяє додавати/редагувати топіки в формі.
-    - Вкладений inline для Items.
-    """
+class FormTopicInline(StackedInline):
+    """Inline for topics, that represented on TemplateFormAdmin page."""
 
     model = FormTopic
-    extra = 1
-    fields = ("topic",)
-    inlines = [TemplateFormItemsInline]
+    extra = 0
+    fields = ("topic", "manage_questions_link")
+    readonly_fields = ("manage_questions_link",)
+    ordering = ("topic__id",)
+
+    @admin.display(description="Questions")
+    def manage_questions_link(self, obj):
+        if not obj.pk:
+            return "Save before add questions"
+        url = reverse("admin:template_form_formtopic_change", args=[obj.pk])
+        return format_html(
+            f'<a href="{url}" class="button button-secondary button-sm">Manage questions</a>'
+        )
 
 
-@admin.register(TemplateForm)
-class TemplateFormAdmin(nested_admin.NestedModelAdmin):
-    """
-    Адмін для TemplateForm з вкладеними inlines.
-    - Створення форми з назвою та tech_stack.
-    - Додавання Топіків через FormTopicInline (існуючі або нові через popup).
-    - Items додаються через вкладений inline, згруповані по топіках.
-    - Поле manager автоматично встановлюється на поточного юзера і не редагується.
-    - Синхронізація топіків після збереження.
-    """
-
-    list_display = (
-        "name",
-        "manager",
-        "tech_stack",
-        "topics_count",
-        "items_count",
-        "created_at",
-        "updated_at",
-    )
-    list_filter = ("tech_stack", "created_at", "updated_at")
-    search_fields = ("name", "slug", "manager__username")
-    ordering = ("-created_at",)
-    inlines = [FormTopicInline]
-    readonly_fields = (
-        "slug",
-        "created_at",
-        "updated_at",
-        "get_topics_with_questions",
-        "manager",
-    )  # Додано 'manager' до readonly
-    fieldsets = (
-        (
-            None,
-            {
-                "fields": ("name", "tech_stack", "slug"),
-            },
-        ),
-        (
-            "Мітки часу",
-            {
-                "fields": ("created_at", "updated_at"),
-            },
-        ),
-        (
-            "Згруповані Питання",
-            {
-                "fields": ("get_topics_with_questions",),
-            },
-        ),
-    )
-
-    def topics_count(self, obj):
-        return obj.form_topics.count()
-
-    topics_count.short_description = "Кількість Топіків"
-
-    def items_count(self, obj):
-        return TemplateFormItems.objects.filter(
-            form_topic__form=obj, is_removed=False
-        ).count()
-
-    items_count.short_description = "Кількість Активних Елементів"
-
-    def get_topics_with_questions(self, obj):
-        """
-        Відображення активних Items, згрупованих за топіками.
-        """
-        form_topics = obj.form_topics.all().prefetch_related("items__origin_question")
-        grouped_items = defaultdict(list)
-        for ft in form_topics:
-            if ft.topic_id:  # Перевірка на topic_id
-                topic_name = ft.topic.name
-            else:
-                topic_name = "Без топіка"
-            active_items = ft.items.filter(is_removed=False)
-            for item in active_items:
-                item_detail_url = reverse(
-                    "admin:template_form_templateformitems_change",
-                    args=(quote(item.pk),),
-                )
-                grouped_items[topic_name].append(
-                    {
-                        "id": item.id,
-                        "text": item.text_snapshot,
-                        "difficulty": item.difficulty_snapshot,
-                        "url": item_detail_url,
-                    }
-                )
-
-        if not grouped_items:
-            return "Немає активних питань."
-
-        html = ""
-        for topic, questions in grouped_items.items():
-            html += f"<h4>{topic}</h4><ul>"
-            for q in questions:
-                html += f'<li><a href="{q["url"]}">[ID: {q["id"]}] Складність: {q["difficulty"]} - {q["text"][:100]}...</a></li>'
-            html += "</ul>"
-        return mark_safe(html)
-
-    get_topics_with_questions.short_description = "Топіки з Питаннями (Згруповані)"
-
-    def save_model(self, request, obj, form, change):
-        if not obj.manager:
-            obj.manager = (
-                request.user
-            )  # Автоматичне встановлення менеджера на поточного юзера
-        super().save_model(request, obj, form, change)
-        from .services import _synchronize_form_topics
-
-        _synchronize_form_topics(obj)
-
-    def save_related(self, request, form, formsets, change):
-        super().save_related(request, form, formsets, change)
-        from .services import _synchronize_form_topics
-
-        _synchronize_form_topics(form.instance)
+# --- MAIN ADMIN CLASSES ---
 
 
 @admin.register(FormTopic)
-class FormTopicAdmin(admin.ModelAdmin):
+class FormTopicAdmin(ModelAdmin):
     """
-    Адмін для FormTopic.
-    """
-
-    list_display = ("form", "topic")
-    list_filter = ("form__tech_stack",)
-    search_fields = ("form__name", "topic__name")
-    ordering = ("form", "topic")
-
-
-@admin.register(TemplateFormItems)
-class TemplateFormItemsAdmin(nested_admin.NestedModelAdmin):
-    """
-    Окремий адмін для TemplateFormItems (для прямого управління, якщо потрібно).
-    - Перевизначення м'якого видалення.
+    Page for manage FormTopic instance and questions.
+    Logic to save TemplateFormItems.
     """
 
-    list_display = (
-        "form_topic",
-        "text_snapshot_short",
-        "difficulty_snapshot",
-        "topic_snapshot",
-        "is_removed",
-        "origin_question",
-        "added_by",
-        "created_at",
-    )
-    list_filter = (
-        "is_removed",
-        "difficulty_snapshot",
-        "source_snapshot",
-        "form_topic__form__tech_stack",
-        "form_topic__form",
-    )
-    search_fields = ("text_snapshot", "topic_snapshot", "form_topic__form__name")
-    ordering = ("-created_at",)
-    readonly_fields = ("max_score_snapshot", "created_at", "source_snapshot")
-    fieldsets = (
-        (
-            None,
-            {
-                "fields": (
-                    "form_topic",
-                    "origin_question",
+    inlines = [TemplateFormItemsInline]
+    readonly_fields = ("form", "topic")
+
+    def has_module_permission(self, request):
+        return False
+
+    def save_formset(self, request, form, formset, change):
+
+        instances = formset.save(commit=False)
+
+        snapshots_to_update = []
+        snapshots_for_new_questions = []
+        snapshots_for_existing_questions = []
+        questions_to_create = []
+        snapshot_parents_for_new_questions = []
+
+        with transaction.atomic():
+
+            for obj in formset.deleted_objects:
+                if obj.pk:
+                    obj.delete()
+
+            for instance in instances:
+                if instance.pk is None:
+                    if not instance.origin_question and instance.text_snapshot:
+                        snapshots_for_new_questions.append(instance)
+                    elif instance.origin_question:
+                        snapshots_for_existing_questions.append(instance)
+                else:
+                    snapshots_to_update.append(instance)
+
+            for snapshot in snapshots_for_new_questions:
+                difficulty = (
+                    snapshot.difficulty_snapshot or Question.QuestionDifficulty.EASY
+                )
+                clean_text = strip_tags(snapshot.text_snapshot)
+                new_question = Question(
+                    question_text=clean_text,
+                    difficulty=difficulty,
+                    topic=snapshot.form_topic.topic,
+                    question_author=request.user,
+                    source=Question.QuestionSource.TEMPLATE,
+                )
+                questions_to_create.append(new_question)
+                snapshot_parents_for_new_questions.append(snapshot)
+
+            if questions_to_create:
+                created_questions = Question.objects.bulk_create(questions_to_create)
+
+                for created_question, parent_snapshot in zip(
+                    created_questions, snapshot_parents_for_new_questions
+                ):
+                    parent_snapshot.origin_question = created_question
+
+            final_snapshots_to_create = (
+                snapshots_for_new_questions + snapshots_for_existing_questions
+            )
+
+            if final_snapshots_to_create:
+                for snapshot in final_snapshots_to_create:
+                    snapshot.added_by = request.user
+                    snapshot.max_score_snapshot = snapshot.origin_question.max_score
+                    snapshot.source_snapshot = snapshot.origin_question.source
+                    snapshot.topic_snapshot = snapshot.form_topic.topic
+                TemplateFormItems.objects.bulk_create(final_snapshots_to_create)
+
+            if snapshots_to_update:
+                for snapshot in snapshots_to_update:
+                    snapshot.max_score_snapshot = snapshot.origin_question.max_score
+                    snapshot.source_snapshot = snapshot.origin_question.source
+                    snapshot.topic_snapshot = snapshot.form_topic.topic
+                update_fields = [
                     "text_snapshot",
                     "difficulty_snapshot",
-                    "topic_snapshot",
                     "max_score_snapshot",
-                    "source_snapshot",
                     "is_removed",
-                ),
-            },
-        ),
-        (
-            "Метадані",
-            {
-                "fields": ("added_by", "created_at"),
-            },
-        ),
-    )
+                    "origin_question",
+                    "topic_snapshot",
+                    "source_snapshot",
+                ]
+                TemplateFormItems.objects.bulk_update(
+                    snapshots_to_update, update_fields
+                )
 
-    def text_snapshot_short(self, obj):
-        return (
-            obj.text_snapshot[:50] + "..."
-            if len(obj.text_snapshot) > 50
-            else obj.text_snapshot
+
+@admin.register(TemplateForm)
+class TemplateFormAdmin(ModelAdmin):
+    """Main admin panel page for TemplateForm."""
+
+    list_display = ("name", "tech_stack", "manager", "created_at", "view_on_site_link")
+    search_fields = ("name", "tech_stack__name")
+    list_filter = ("tech_stack",)
+    inlines = [FormTopicInline]
+    readonly_fields = ("manager",)
+    prepopulated_fields = {"slug": ("name",)}
+
+    @admin.display(description="View page")
+    def view_on_site_link(self, obj):
+        if not obj.slug:
+            return "Save to take a link"
+        url = reverse("admin:template_form_readonlytemplateform_change", args=[obj.id])
+        icon_svg = """
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5 mr-1 inline-block">
+                <path d="M10 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z" />
+                <path fill-rule="evenodd" d="M.664 10.59a1.651 1.651 0 0 1 0-1.18l3.423-3.423a1.651 1.651 0 0 1 2.334 0L10 9.393a1.651 1.651 0 0 1 2.334 0l3.579-3.579a1.651 1.651 0 0 1 2.334 0l3.423 3.423a1.651 1.651 0 0 1 0 1.18l-3.423 3.423a1.651 1.651 0 0 1-2.334 0L10 10.607a1.651 1.651 0 0 1-2.334 0L4.086 14.21a1.651 1.651 0 0 1-2.334 0L.664 10.59Z" clip-rule="evenodd" />
+            </svg>
+        """
+        return format_html(
+            f"""
+                    <a href="{url}" target="_blank"
+                       class="flex items-center text-primary-600 hover:text-primary-800 font-semibold">
+                       {icon_svg}
+                       View
+                    </a>
+                    """
         )
 
-    text_snapshot_short.short_description = "Снепшот Тексту"
+    def save_model(self, request, obj, form, change):
+        if not obj.pk:
+            obj.manager = request.user
+        super().save_model(request, obj, form, change)
+
+
+# --- READ-ONLY ADMIN CLASSES (Two Level: Form+Topic / Topic+Snapshots) ---
+
+
+class ReadOnlyTemplateFormItemsInline(TabularInline):
+    """
+    Inline for snapshot questions, for ReadOnlyFormTopicAdmin page.
+    Used for represented question in ReadOnlyFormTopicAdmin
+    """
+
+    model = TemplateFormItems
+    extra = 0
+    fields = (
+        "text_snapshot",
+        "difficulty_snapshot",
+        "source_snapshot",
+    )
+    readonly_fields = fields
+
+    def has_add_permission(self, request, obj=None):
+        return False
 
     def has_delete_permission(self, request, obj=None):
-        return False  # Відключення жорсткого видалення у списку
+        return False
 
-    def delete_model(self, request, obj):
-        # М'яке видалення для індивідуального видалення
-        obj.is_removed = True
-        obj.save()
+    def get_queryset(self, request):
+        queryset = super().get_queryset(request)
 
-    def save_model(self, request, obj, form, change):
-        if not change:
-            obj.added_by = request.user
-        if "difficulty_snapshot" in form.changed_data:
-            obj.max_score_snapshot = obj.difficulty_snapshot * 3
-        super().save_model(request, obj, form, change)
-        from .services import _synchronize_form_topics
+        return queryset.filter(is_removed=False)
 
-        _synchronize_form_topics(obj.form_topic.form)
+
+@admin.register(ReadOnlyFormTopic)
+class ReadOnlyFormTopicAdmin(ModelAdmin):
+    """
+    Admin panel page for one topic.
+    """
+
+    inlines = [ReadOnlyTemplateFormItemsInline]
+    readonly_fields = ("form", "topic")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def has_module_permission(self, request):
+        return False  # Ховаємо з головної
+
+
+class ReadOnlyFormTopicInline(StackedInline):
+    """
+    Inline for topics list, for ReadOnlyTemplateFormAdmin page.
+    Used for represented topics in ReadOnlyTemplateFormAdmin
+    """
+
+    model = FormTopic
+    extra = 0
+    fields = ("topic", "view_questions_link")
+    readonly_fields = ("topic", "view_questions_link")
+
+    @admin.display(description="Questions")
+    def view_questions_link(self, obj):
+        if not obj.pk:
+            return "---"
+
+        url = reverse("admin:template_form_readonlyformtopic_change", args=[obj.pk])
+        return format_html(f'<a href="{url}" class="button">View questions</a>')
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(ReadOnlyTemplateForm)
+class ReadOnlyTemplateFormAdmin(ModelAdmin):
+    """
+    Main admin page for ReadOnly TemplateForm.
+    """
+
+    inlines = [ReadOnlyFormTopicInline]
+    readonly_fields = ("name", "tech_stack", "manager", "slug")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def has_module_permission(self, request):
+        return False
