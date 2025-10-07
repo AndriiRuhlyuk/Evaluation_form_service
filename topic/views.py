@@ -31,6 +31,7 @@ class TopicViewSet(viewsets.ModelViewSet):
     - `PUT /api/topics/{id}/` - Update topic completely
     - `PATCH /api/topics/{id}/` - Update topic partially
     - `DELETE /api/topics/{id}/` - Soft delete topic
+    - `POST /api/topics/{id}/restore/` - Restore unactive topic
     """
 
     queryset = Topic.objects.all()
