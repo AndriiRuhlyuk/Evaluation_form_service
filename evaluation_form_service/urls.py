@@ -28,6 +28,7 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/techstacks/", include("techstack.urls", namespace="techstack")),
     path("api/topics/", include("topic.urls", namespace="topic")),
+    path("api/employees/", include(("employee.urls", "employee"), "employee")),
     path("api/questions/", include("question.urls", namespace="question")),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path(
