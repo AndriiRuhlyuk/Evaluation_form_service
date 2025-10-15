@@ -1,11 +1,13 @@
 from rest_framework.decorators import action
 from rest_framework import viewsets, filters, status
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework.permissions import IsAdminUser, AllowAny
+from rest_framework.permissions import IsAdminUser, AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from techstack.models import TechStack
 from drf_spectacular.utils import extend_schema, OpenApiParameter
+
+from techstack.permissions import IsEmployee
 from techstack.serializers import (
     TechStackSerializer,
     TechStackListSerializer,
@@ -44,6 +46,7 @@ class TechStackViewSet(viewsets.ModelViewSet):
     filterset_fields = ["is_active"]
     search_fields = ["name"]
     ordering_fields = ["name", "id"]
+    permission_classes = [IsAuthenticated, IsEmployee]
 
     def get_permissions(self):
         if hasattr(self, "action") and self.action:

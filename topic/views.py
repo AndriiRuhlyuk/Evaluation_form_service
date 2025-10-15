@@ -2,8 +2,9 @@ from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from rest_framework import filters, viewsets, status
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAdminUser, AllowAny
+from rest_framework.permissions import IsAdminUser, AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from topic.permissions import IsEmployee
 
 from topic.models import Topic
 from topic.serializers import (
@@ -44,6 +45,7 @@ class TopicViewSet(viewsets.ModelViewSet):
     search_fields = ["name"]
     filterset_fields = ["is_active"]
     ordering_fields = ["name", "id"]
+    permission_classes = [IsAuthenticated, IsEmployee]
 
     def get_permissions(self):
         if hasattr(self, "action") and self.action:

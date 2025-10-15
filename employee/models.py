@@ -33,8 +33,6 @@ class Employee(AbstractUser):
     email = models.EmailField(unique=True)
     is_active = models.BooleanField(default=True)
     updated_at = models.DateTimeField(auto_now=True)
-    tech_stack = models.ManyToManyField(TechStack)
-    project = models.CharField(max_length=50)
 
     ROLE_CHOICES = [
         ("MANAGER", "Manager"),
