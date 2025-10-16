@@ -1,5 +1,7 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
+from rest_framework_simplejwt.tokens import RefreshToken, TokenError
+from rest_framework.exceptions import ValidationError
 
 User = get_user_model()
 
@@ -50,3 +52,42 @@ class EmployeeSerializer(serializers.ModelSerializer):
             user.set_password(password)
             user.save()
         return user
+
+
+class LogoutSerializer(serializers.Serializer):
+    """Logout serializer"""
+
+    refresh = serializers.CharField(
+        write_only=True,
+        required=True,
+        help_text="Refresh token to be blacklisted",
+    )
+    all_tokens = serializers.BooleanField(
+        required=False,
+        default=False,
+        help_text="Set to true to blacklist all refresh tokens for the user",
+    )
+
+    def validate_refresh(self, value):
+        try:
+            token = RefreshToken(value)
+
+            token_user_id = token.payload.get("user_id")
+            authenticated_user_id = self.context["request"].user.id
+
+            if int(token_user_id) != int(authenticated_user_id):
+                raise ValidationError(
+                    "Refresh token does not belong to the authenticated user"
+                )
+
+            token.verify()
+
+        except TokenError as e:
+            raise ValidationError("Invalid or expired refresh token")
+        except (ValueError, TypeError):
+
+            raise ValidationError("Invalid token format")
+        except Exception as e:
+            raise ValidationError("Token validation failed")
+
+        return value

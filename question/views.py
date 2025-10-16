@@ -4,6 +4,8 @@ from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from permissions import IsEmployee
 
 from question.models import Question
 from question.serializers import (
@@ -61,6 +63,7 @@ class QuestionViewSet(viewsets.ModelViewSet):
     }
     search_fields = ["question_text"]
     ordering_fields = ["difficulty", "usage_count"]
+    permission_classes = [IsAuthenticated, IsEmployee]
 
     def get_serializer_class(self):
         if self.action == "list":
