@@ -1,5 +1,5 @@
 from django.db import models
-from django.contrib.auth.models import User
+from employee.models import Employee
 
 from topic.models import Topic
 
@@ -33,7 +33,7 @@ class Question(models.Model):
         related_name="questions",
     )
     question_author = models.ForeignKey(
-        User,
+        Employee,
         on_delete=models.SET_NULL,
         related_name="questions",
         null=True,
