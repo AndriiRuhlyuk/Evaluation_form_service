@@ -1,5 +1,3 @@
-from collections import defaultdict
-
 from django.urls import reverse
 from rest_framework import serializers
 
@@ -117,7 +115,7 @@ class TemplateFormSerializer(serializers.ModelSerializer):
 
 
 class TemplateFormListSerializer(serializers.ModelSerializer):
-    """Serializer for List TemplateForm."""
+    """Serializer for List TemplateForm instances."""
 
     tech_stack = serializers.StringRelatedField()
     topics_count = serializers.IntegerField(source="topics.count", read_only=True)
@@ -245,26 +243,23 @@ class TemplateFormDetailSerializer(serializers.ModelSerializer):
         """
         Group prefetched active questions by topics
         """
-        grouped_items = defaultdict(list)
+        result = []
 
         for form_topic in instance.form_topics.all():
-            for item in form_topic.items.all():
+            active_items = [
+                item for item in form_topic.items.all() if not item.is_removed
+            ]
 
-                if not item.is_removed:
+            if not active_items:
+                continue
 
-                    grouped_items[form_topic.topic].append(item)
-
-        sorted_grouped_items = dict(
-            sorted(grouped_items.items(), key=lambda x: x[0].name)
-        )
-
-        result = []
-        for topic, items_list in sorted_grouped_items.items():
             result.append(
                 {
-                    "topic": TopicSerializer(topic, context=self.context).data,
+                    "topic": TopicSerializer(
+                        form_topic.topic, context=self.context
+                    ).data,
                     "questions": TemplateFormItemsListSerializer(
-                        items_list, many=True, context=self.context
+                        active_items, many=True, context=self.context
                     ).data,
                 }
             )

@@ -35,6 +35,8 @@ ALLOWED_HOSTS = []
 # Application definition
 
 INSTALLED_APPS = [
+    "daphne",
+    "channels",
     "unfold",
     "unfold.contrib.filters",
     "unfold.contrib.forms",
@@ -58,10 +60,12 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt",
     "question",
     "template_form",
+    "working_form",
 ]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "debug_toolbar.middleware.DebugToolbarMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -90,7 +94,9 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = "evaluation_form_service.wsgi.application"
+ASGI_APPLICATION = "evaluation_form_service.asgi.application"
+
+# WSGI_APPLICATION = "evaluation_form_service.wsgi.application"
 
 
 # Database
@@ -144,6 +150,9 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
@@ -184,4 +193,15 @@ SPECTACULAR_SETTINGS = {
     },
 }
 
-INTERNAL_IPS = ["127.0.0.1", "172.18.0.1", "192.168.65.1"]
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [("redis", 6379)],
+        },
+    },
+}
+
+DEBUG_TOOLBAR_CONFIG = {
+    "SHOW_TOOLBAR_CALLBACK": lambda request: DEBUG,
+}

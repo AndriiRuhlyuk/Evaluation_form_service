@@ -1,3 +1,5 @@
+from typing import Any
+
 from django.db import transaction
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
@@ -8,6 +10,7 @@ from techstack.models import TechStack
 from django.contrib.auth.models import User
 from template_form.models import TemplateForm, TemplateFormItems, FormTopic
 from topic.models import Topic
+from working_form.models import WorkingForm, WorkingFormTopic, WorkingFormItem
 
 
 def _ensure_tech_stacks(tech_stack_data):
@@ -188,41 +191,34 @@ def create_template_form(manager: User, validated_data: dict) -> TemplateForm:
     return template_form
 
 
-@transaction.atomic
-def update_template_form(
-    instance: TemplateForm,
-    manager: User,
-    validated_data: dict,
-) -> TemplateForm:
-    """Update TemplateForm with all nested objects using 'soft replace' logic."""
-
-    topics_data = validated_data.pop("topics_with_questions", None)
-    instance.name = validated_data.get("name", instance.name)
-    if "tech_stack" in validated_data:
-        instance.tech_stack = _ensure_tech_stacks(validated_data["tech_stack"])
-    instance.save()
-
-    if topics_data is None:
-        return instance
-
-    incoming_question_ids = set()
-    for topic_group in topics_data:
-        for question_data in topic_group["questions"]:
-            if "origin_question" in question_data:
-                incoming_question_ids.add(question_data["origin_question"])
-
-    existing_items = TemplateFormItems.objects.filter(
-        form_topic__form=instance
-    ).select_related("origin_question")
-    existing_items_map = {
-        item.origin_question.id: item for item in existing_items if item.origin_question
-    }
-
-    ids_to_deactivate = set(existing_items_map.keys()) - incoming_question_ids
-    if ids_to_deactivate:
-        instance.items.filter(origin_question_id__in=ids_to_deactivate).update(
-            is_removed=True
+def _deactivate_removed_items(
+    instance: TemplateForm, incoming_question_ids: set[int]
+) -> None:
+    """
+    Finds questions that are no longer in the form data and marks them as removed.
+    """
+    existing_active_ids = set(
+        instance.form_topics.items.filter(is_removed=False).values_list(
+            "origin_question_id", flat=True
         )
+    )
+    ids_to_deactivate = existing_active_ids - incoming_question_ids
+
+    if ids_to_deactivate:
+        instance.form_topics.items.filter(
+            origin_question_id__in=ids_to_deactivate
+        ).update(is_removed=True)
+
+
+def _reactivate_or_identify_new_items(
+    topics_data: list[dict[str, Any]],
+    existing_items_map: dict[int, TemplateFormItems],
+) -> tuple[list[int], list[dict[str, Any]]]:
+    """
+    Analyzes incoming data to sort questions into two groups:
+    1. Items to be reactivated.
+    2. Completely new items to be processed.
+    """
 
     items_to_reactivate_ids = []
     new_topic_groups_to_process = []
@@ -246,14 +242,60 @@ def update_template_form(
                     "questions": new_questions_for_this_topic,
                 }
             )
+    return (items_to_reactivate_ids, new_topic_groups_to_process)
+
+
+def _process_newly_added_items(
+    instance: TemplateForm, manager: User, new_topic_groups: list[dict[str, Any]]
+) -> None:
+    """
+    Takes the list of new questions grouped by topic and creates them in the database
+    by delegating to the main processing function.
+    """
+    if new_topic_groups:
+        process_topics_and_questions(instance, manager, new_topic_groups)
+
+
+@transaction.atomic
+def update_template_form(
+    instance: TemplateForm,
+    manager: User,
+    validated_data: dict,
+) -> TemplateForm:
+    """Update TemplateForm with all nested objects using 'soft replace' logic."""
+
+    instance.name = validated_data.get("name", instance.name)
+    if "tech_stack" in validated_data:
+        instance.tech_stack = _ensure_tech_stacks(validated_data["tech_stack"])
+    instance.save()
+
+    topics_data = validated_data.pop("topics_with_questions", None)
+
+    if topics_data is None:
+        return instance
+
+    incoming_question_ids = {
+        question_data["origin_question"]
+        for topic_group in topics_data
+        for question_data in topic_group["questions"]
+        if "origin_question" in question_data
+    }
+    existing_items_map = {
+        item.origin_question_id: item for item in instance.form_topics.items.all()
+    }
+
+    _deactivate_removed_items(instance, incoming_question_ids)
+
+    items_to_reactivate_ids, new_topic_groups = _reactivate_or_identify_new_items(
+        topics_data, existing_items_map
+    )
 
     if items_to_reactivate_ids:
         instance.form_topics.items.filter(id__in=items_to_reactivate_ids).update(
             is_removed=False
         )
 
-    if new_topic_groups_to_process:
-        process_topics_and_questions(instance, manager, new_topic_groups_to_process)
+    _process_newly_added_items(instance, manager, new_topic_groups)
 
     _synchronize_form_topics(instance)
 
@@ -277,3 +319,78 @@ def get_question_details(request, pk):
         "max_score_snapshot": question.max_score,
     }
     return JsonResponse(data)
+
+
+@transaction.atomic
+def clone_template_to_working(
+    template_form: TemplateForm, form_data: dict
+) -> WorkingForm:
+    """
+    Creates a deep copy of a TemplateForm into a new WorkingForm instance.
+
+    Args:
+        template_form: The source TemplateForm instance.
+        form_data: A dictionary with validated data for the new WorkingForm
+                   (e.g., {'vacancy': '...', 'level': '...', 'project': '...', 'interviewers': [...]}).
+    Returns:
+        The newly created WorkingForm instance.
+    """
+
+    interviewers = form_data.pop("interviewers", [])
+    working_form = WorkingForm.objects.create(
+        template_origin=template_form,
+        manager=template_form.manager,
+        tech_stack=template_form.tech_stack,
+        name=f"{form_data.get('level')} {form_data.get('vacancy')} {form_data.get('project')}",
+        **form_data,
+    )
+    if interviewers:
+        working_form.interviewers.set(interviewers)
+
+    template_form_topics = template_form.form_topics.select_related("topic").all()
+    if not template_form_topics:
+        return working_form
+
+    topic_map = {
+        tpc_frm.topic_id: WorkingFormTopic(
+            working_form=working_form, topic=tpc_frm.topic
+        )
+        for tpc_frm in template_form_topics
+    }
+
+    WorkingFormTopic.objects.bulk_create(topic_map.values())
+
+    newly_created_topics = WorkingFormTopic.objects.filter(working_form=working_form)
+    topics_map_with_new_pks = {tpc.topic_id: tpc for tpc in newly_created_topics}
+
+    items_to_create = []
+
+    template_items = TemplateFormItems.objects.filter(
+        form_topic__form=template_form, is_removed=False
+    )
+
+    for item in template_items:
+        new_form_topic = topics_map_with_new_pks.get(item.form_topic.topic_id)
+        if not new_form_topic:
+            continue
+
+        items_to_create.append(
+            WorkingFormItem(
+                form_topic=new_form_topic,
+                added_by=item.added_by,
+                origin_question=item.origin_question,
+                text_snapshot=item.text_snapshot,
+                difficulty_snapshot=item.difficulty_snapshot,
+                source_snapshot=item.source_snapshot,
+                topic_snapshot=item.topic_snapshot,
+                max_score_snapshot=item.max_score_snapshot,
+            )
+        )
+
+    if items_to_create:
+        WorkingFormItem.objects.bulk_create(items_to_create)
+
+    topic_ids = [t.topic_id for t in template_form_topics]
+    working_form.topics.set(topic_ids)
+
+    return working_form

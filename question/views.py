@@ -87,7 +87,7 @@ class QuestionViewSet(viewsets.ModelViewSet):
         For LIST - filter by is_active (by default only active)
         For DETAIL (retrieve, update, destroy) - always all objects
         """
-        queryset = Question.objects.all()
+        queryset = super().get_queryset()
 
         if self.action == "list":
             is_active_param = self.request.query_params.get("is_active")

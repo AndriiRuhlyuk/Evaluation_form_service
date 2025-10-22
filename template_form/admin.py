@@ -4,7 +4,6 @@ from django.db import models, transaction
 from django.urls import reverse
 from django.utils.html import format_html
 from unfold.admin import ModelAdmin, TabularInline, StackedInline
-from unfold.contrib.forms.widgets import WysiwygWidget
 
 from question.models import Question
 from .models import (
@@ -136,6 +135,8 @@ class FormTopicAdmin(ModelAdmin):
 
             if final_snapshots_to_create:
                 for snapshot in final_snapshots_to_create:
+                    snapshot.text_snapshot = snapshot.origin_question.question_text
+                    snapshot.difficulty_snapshot = snapshot.origin_question.difficulty
                     snapshot.added_by = request.user
                     snapshot.max_score_snapshot = snapshot.origin_question.max_score
                     snapshot.source_snapshot = snapshot.origin_question.source

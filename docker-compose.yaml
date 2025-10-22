@@ -10,11 +10,13 @@ services:
       - ./:/app
     command: >
       sh -c "python manage.py wait_for_db &&
-      python manage.py makemigrations &&
-      python manage.py migrate &&
-      python manage.py runserver 0.0.0.0:8000"
+            python manage.py makemigrations &&
+            python manage.py migrate &&
+            python manage.py collectstatic --no-input &&
+            daphne -b 0.0.0.0 -p 8000 evaluation_form_service.asgi:application"
     depends_on:
       - db
+      - redis
 
 
   db:
@@ -23,9 +25,14 @@ services:
     env_file:
       - .env
     ports:
-      - "5433:5432"
+      - "5432:5432"
     volumes:
       - my_db:$PGDATA
+
+  redis:
+    image: "redis:alpine"
+    ports:
+      - "6379:6379"
 
 volumes:
   my_db:

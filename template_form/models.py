@@ -11,13 +11,17 @@ class BaseForm(models.Model):
 
     name = models.CharField(max_length=500)
     manager = models.ForeignKey(
-        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="forms"
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="%(class)s_forms",
     )
     tech_stack = models.ForeignKey(
-        TechStack, on_delete=models.PROTECT, related_name="forms"
+        TechStack, on_delete=models.PROTECT, related_name="%(class)s_forms"
     )
     topics = models.ManyToManyField(
-        Topic, through="FormTopic", related_name="template_forms", blank=True
+        Topic, through="FormTopic", related_name="%(class)s_forms", blank=True
     )
     slug = models.SlugField(max_length=500, blank=True, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -45,8 +49,15 @@ class TemplateForm(BaseForm):
 class BaseFormItems(models.Model):
     """Base abstract model for all forms items"""
 
+    class Difficulty(models.IntegerChoices):
+        EASY = 1, "Easy"
+        MEDIUM = 2, "Medium"
+        HARD = 3, "Hard"
+
     text_snapshot = models.TextField(blank=True, null=True)
-    difficulty_snapshot = models.IntegerField(blank=True, null=True)
+    difficulty_snapshot = models.IntegerField(
+        choices=Difficulty.choices, blank=True, null=True
+    )
     source_snapshot = models.CharField(max_length=25, blank=True, null=True)
     topic_snapshot = models.CharField(max_length=125, blank=True, null=True)
     max_score_snapshot = models.IntegerField(blank=True, null=True)

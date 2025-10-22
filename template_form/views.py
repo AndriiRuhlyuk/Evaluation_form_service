@@ -1,11 +1,12 @@
-from django.db.models import Count, Q
-
+from rest_framework.decorators import action
+from django.db.models import Count, Q, Prefetch
 
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, OpenApiParameter
-from rest_framework import viewsets, filters
+from rest_framework import viewsets, filters, status
+from rest_framework.response import Response
 
-from template_form.models import TemplateForm, TemplateFormItems
+from template_form.models import TemplateForm, TemplateFormItems, FormTopic
 from template_form.serializers import (
     TemplateFormListSerializer,
     TemplateFormDetailSerializer,
@@ -14,7 +15,11 @@ from template_form.serializers import (
     TemplateFormItemsListSerializer,
     TemplateFormItemUpdateSerializer,
 )
-from template_form.services import _synchronize_form_topics
+from template_form.services import _synchronize_form_topics, clone_template_to_working
+from working_form.serializers import (
+    WorkingFormCreateSerializer,
+    WorkingFormDetailSerializer,
+)
 
 
 class TemplateFormViewSet(viewsets.ModelViewSet):
@@ -40,8 +45,12 @@ class TemplateFormViewSet(viewsets.ModelViewSet):
         TemplateForm.objects.select_related("tech_stack", "manager")
         .prefetch_related(
             "topics",
-            "form_topics__topic",
-            "form_topics__items__origin_question",
+            Prefetch(
+                "form_topics",
+                queryset=FormTopic.objects.order_by("topic__name")
+                .select_related("topic")
+                .prefetch_related("items__origin_question"),
+            ),
         )
         .annotate(
             active_items_count=Count(
@@ -65,6 +74,8 @@ class TemplateFormViewSet(viewsets.ModelViewSet):
     lookup_field = "slug"
 
     def get_serializer_class(self):
+        if self.action == "create_working_form":
+            return WorkingFormCreateSerializer
         if self.action == "list":
             return TemplateFormListSerializer
         elif self.action == "retrieve":
@@ -76,6 +87,31 @@ class TemplateFormViewSet(viewsets.ModelViewSet):
         Pass request object to serializer for access to current user
         """
         return {"request": self.request}
+
+    @action(detail=True, methods=["post"])
+    def create_working_form(self, request, slug=None):
+        """
+        Creates a WorkingForm instance based on this template.
+        """
+        template_form = self.get_object()
+
+        input_serializer = self.get_serializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+
+        try:
+            working_form = clone_template_to_working(
+                template_form=template_form,
+                form_data=input_serializer.validated_data,
+            )
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to clone template: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        output_serializer = WorkingFormDetailSerializer(
+            working_form, context={"request": request}
+        )
+        return Response(output_serializer.data, status=status.HTTP_201_CREATED)
 
     @extend_schema(
         summary="List of template forms",
