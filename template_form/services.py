@@ -3,7 +3,9 @@ from typing import Any
 from django.db import transaction
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
+from django.utils.text import slugify
 
+from employee.models import Employee
 from question.models import Question
 from rest_framework import serializers
 from techstack.models import TechStack
@@ -323,7 +325,7 @@ def get_question_details(request, pk):
 
 @transaction.atomic
 def clone_template_to_working(
-    template_form: TemplateForm, form_data: dict
+    template_form: TemplateForm, recruiter: Employee, form_data: dict
 ) -> WorkingForm:
     """
     Creates a deep copy of a TemplateForm into a new WorkingForm instance.
@@ -337,18 +339,45 @@ def clone_template_to_working(
     """
 
     interviewers = form_data.pop("interviewers", [])
+    approvers = form_data.pop("approvers", [])
+
+    vacancy = form_data.get("vacancy")
+    project = form_data.get("project")
+    level = form_data.get("level")
+
+    level_display = dict(WorkingForm.Level.choices).get(level, level.capitalize())
+
+    if project:
+        name = f"{level_display} {vacancy} ({project})"
+    else:
+        name = f"{level_display} {vacancy}"
+
+    base_slug = slugify(name)
+    slug = base_slug
+    counter = 1
+
+    while WorkingForm.objects.filter(slug=slug).exists():  # 1 SELECT
+        slug = f"{base_slug}-{counter}"
+        counter += 1
+
+    form_data["name"] = name
+    form_data["slug"] = slug
+
     working_form = WorkingForm.objects.create(
         template_origin=template_form,
-        manager=template_form.manager,
+        manager=recruiter,
         tech_stack=template_form.tech_stack,
-        name=f"{form_data.get('level')} {form_data.get('vacancy')} {form_data.get('project')}",
         **form_data,
     )
-    if interviewers:
-        working_form.interviewers.set(interviewers)
 
-    template_form_topics = template_form.form_topics.select_related("topic").all()
+    if interviewers:
+        working_form.interviewers.add(*interviewers)
+    if approvers:
+        working_form.approvers.add(*approvers)
+
+    template_form_topics = template_form.form_topics.all()
     if not template_form_topics:
+        working_form.save()
         return working_form
 
     topic_map = {
@@ -365,9 +394,9 @@ def clone_template_to_working(
 
     items_to_create = []
 
-    template_items = TemplateFormItems.objects.filter(
-        form_topic__form=template_form, is_removed=False
-    )
+    template_items = TemplateFormItems.objects.select_related(
+        "added_by", "origin_question", "form_topic"
+    ).filter(form_topic__form=template_form, is_removed=False)
 
     for item in template_items:
         new_form_topic = topics_map_with_new_pks.get(item.form_topic.topic_id)
@@ -389,8 +418,5 @@ def clone_template_to_working(
 
     if items_to_create:
         WorkingFormItem.objects.bulk_create(items_to_create)
-
-    topic_ids = [t.topic_id for t in template_form_topics]
-    working_form.topics.set(topic_ids)
 
     return working_form

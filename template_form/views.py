@@ -1,5 +1,5 @@
 from rest_framework.decorators import action
-from django.db.models import Count, Q, Prefetch
+from django.db.models import Count, Q, Prefetch, prefetch_related_objects
 
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, OpenApiParameter
@@ -16,10 +16,12 @@ from template_form.serializers import (
     TemplateFormItemUpdateSerializer,
 )
 from template_form.services import _synchronize_form_topics, clone_template_to_working
+from working_form.models import WorkingForm, WorkingFormTopic, WorkingFormItem
 from working_form.serializers import (
     WorkingFormCreateSerializer,
     WorkingFormDetailSerializer,
 )
+from working_form.views import WorkingFormViewSet
 
 
 class TemplateFormViewSet(viewsets.ModelViewSet):
@@ -44,7 +46,6 @@ class TemplateFormViewSet(viewsets.ModelViewSet):
     queryset = (
         TemplateForm.objects.select_related("tech_stack", "manager")
         .prefetch_related(
-            "topics",
             Prefetch(
                 "form_topics",
                 queryset=FormTopic.objects.order_by("topic__name")
@@ -101,6 +102,7 @@ class TemplateFormViewSet(viewsets.ModelViewSet):
         try:
             working_form = clone_template_to_working(
                 template_form=template_form,
+                recruiter=request.user,
                 form_data=input_serializer.validated_data,
             )
         except Exception as e:
@@ -108,8 +110,28 @@ class TemplateFormViewSet(viewsets.ModelViewSet):
                 {"error": f"Failed to clone template: {e}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+        try:
+            working_form_pk = working_form.pk
+            retrieve_queryset = WorkingForm.objects.select_related(
+                "tech_stack"
+            ).prefetch_related("interviewers", "approvers", "approved_by")
+            optimized_working_form = retrieve_queryset.get(pk=working_form_pk)
+            working_viewset_instance = WorkingFormViewSet()
+
+            prefetch_related_objects(
+                [optimized_working_form],
+                working_viewset_instance._get_form_topics_prefetch(),
+            )
+
+        except WorkingForm.DoesNotExist:
+            return Response(
+                {"error": "Failed to reload created form"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
         output_serializer = WorkingFormDetailSerializer(
-            working_form, context={"request": request}
+            optimized_working_form, context={"request": request}
         )
         return Response(output_serializer.data, status=status.HTTP_201_CREATED)
 

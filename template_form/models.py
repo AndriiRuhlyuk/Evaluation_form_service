@@ -1,5 +1,5 @@
+from django.conf import settings
 from django.db import models
-from django.contrib.auth.models import User
 
 from techstack.models import TechStack
 from django.utils.text import slugify
@@ -11,7 +11,7 @@ class BaseForm(models.Model):
 
     name = models.CharField(max_length=500)
     manager = models.ForeignKey(
-        User,
+        settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -75,7 +75,7 @@ class BaseFormItems(models.Model):
     )
 
     added_by = models.ForeignKey(
-        User,
+        settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         related_name="%(class)s_added_items",

@@ -7,11 +7,10 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.renderers import JSONRenderer, BrowsableAPIRenderer
 from rest_framework.response import Response
-from .permissions import CanEditForm
 
-from question.models import Question
 from topic.serializers import TopicSerializer
 from working_form.models import WorkingForm, WorkingFormTopic, WorkingFormItem
+from working_form.permissions import CanInteractWithWorkingForm
 from working_form.serializers import (
     WorkingFormDetailSerializer,
     WorkingFormListSerializer,
@@ -21,7 +20,7 @@ from working_form.serializers import (
     WorkingFormTopicListSerializer,
     WorkingFormUpdateSerializer,
     AddTopicSerializer,
-    SimpleUserSerializer,
+    SimpleEmployeeSerializer,
 )
 from working_form.services import add_question_to_topic, add_topic_to_working_form
 
@@ -30,6 +29,7 @@ class WorkingFormViewSet(
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.UpdateModelMixin,
+    mixins.DestroyModelMixin,
     viewsets.GenericViewSet,
 ):
 
@@ -47,35 +47,28 @@ class WorkingFormViewSet(
         return WorkingFormListSerializer
 
     def get_permissions(self):
-        if self.action in ["update", "partial_update", "add_topic"]:
-            return [permissions.IsAuthenticated(), CanEditForm()]
+        if self.action in [
+            "update",
+            "partial_update",
+            "add_topic",
+            "approve",
+            "unapprove",
+        ]:
+            return [permissions.IsAuthenticated(), CanInteractWithWorkingForm()]
+        if self.action == "destroy":
+            return [permissions.IsAuthenticated(), permissions.IsAdminUser()]
         return [permissions.IsAuthenticated()]
 
     def _get_form_topics_prefetch(self):
         """
-        Return Prefetch-object for topics with annotations:
-        - topic_delete_votes
-        - total_approvers_annotated
-        - questions_count
-        - candidate_for_deletion_count
+        Return Prefetch-object for topics with annotations
+        that counts in custom manager in nodel.
         """
         return Prefetch(
             "form_topics",
-            queryset=WorkingFormTopic.objects.filter(is_removed=False)
-            .annotate(
-                topic_delete_votes=Count("deleted_by", distinct=True),
-                total_approvers_annotated=Count(
-                    "working_form__approvers", distinct=True
-                ),
-                questions_count=Count("items", filter=Q(items__is_removed=False)),
-                candidate_for_deletion_count=Count(
-                    "items",
-                    filter=Q(items__deleted_by__isnull=False)
-                    & Q(items__is_removed=False),
-                ),
-            )
+            queryset=WorkingFormTopic.objects.get_annotated_list()
+            .filter(is_removed=False)
             .order_by("topic__name")
-            .select_related("topic")
             .prefetch_related("items__deleted_by"),
         )
 
@@ -88,11 +81,11 @@ class WorkingFormViewSet(
         to avoid conflicts (prefetch/annotate)
         """
 
-        qs = super().get_queryset()
+        queryset = super().get_queryset()
 
         if self.action == "list":
 
-            return qs.prefetch_related(self._get_form_topics_prefetch()).annotate(
+            return queryset.prefetch_related(self._get_form_topics_prefetch()).annotate(
                 approvers_count=Count("approvers", distinct=True),
                 approved_by_count=Count("approved_by", distinct=True),
                 interviewer_count=Count("interviewers", distinct=True),
@@ -104,13 +97,13 @@ class WorkingFormViewSet(
             "approve",
             "add_topic",
         ]:
-            return qs.prefetch_related("interviewers", "approvers", "approved_by")
+            return queryset.prefetch_related("interviewers", "approvers", "approved_by")
 
         if self.action == "retrieve":
 
-            return qs.prefetch_related("interviewers", "approvers", "approved_by")
+            return queryset.prefetch_related("interviewers", "approvers", "approved_by")
 
-        return qs
+        return queryset
 
     def retrieve(self, request, *args, **kwargs):
         """
@@ -129,12 +122,16 @@ class WorkingFormViewSet(
         """
         Take validated lists (from serializer) and use
         them in WebSocket message after saving (no cash)
+        - Save instance,
+        - RELOAD M2M-cash (for response in serializer in update)
         """
+
+        form_instance = serializer.save()
+
+        prefetch_related_objects([form_instance], "interviewers", "approvers")
 
         interviewers_list = serializer._interviewers_list
         approvers_list = serializer._approvers_list
-
-        form_instance = serializer.save()
 
         channel_layer = get_channel_layer()
         form_group_name = f"form_{form_instance.id}"
@@ -142,8 +139,8 @@ class WorkingFormViewSet(
             "vacancy": form_instance.vacancy,
             "level": form_instance.get_level_display(),
             "project": form_instance.project,
-            "interviewers": SimpleUserSerializer(interviewers_list, many=True).data,
-            "approvers": SimpleUserSerializer(approvers_list, many=True).data,
+            "interviewers": SimpleEmployeeSerializer(interviewers_list, many=True).data,
+            "approvers": SimpleEmployeeSerializer(approvers_list, many=True).data,
         }
         async_to_sync(channel_layer.group_send)(
             form_group_name, {"type": "form_metadata_updated", "data": updated_data}
@@ -151,22 +148,24 @@ class WorkingFormViewSet(
 
     def update(self, request, *args, **kwargs):
         """
-        Take instance with cashed data (interviewers/approvers),
-        save validate data through perform update (no cash).
-        Reload cashed data (interviewers/approvers) for response.
+        Update instance, with prefetched interviewers/approvers (from perform update)
+        for response alive cashed topics (_get_form_topics_prefetch)
         """
         partial = kwargs.pop("partial", False)
-
         instance = self.get_object()
 
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
 
-        self.perform_update(serializer)
+        updated_instance = self.perform_update(serializer)
 
-        prefetch_related_objects([instance], "interviewers", "approvers")
+        prefetch_related_objects([updated_instance], self._get_form_topics_prefetch())
 
-        return Response(serializer.data)
+        detail_serializer = WorkingFormDetailSerializer(
+            updated_instance, context=self.get_serializer_context()
+        )
+
+        return Response(detail_serializer.data)
 
     @action(detail=True, methods=["post"], url_path="add-topic")
     def add_topic(self, request, slug=None):
@@ -214,21 +213,8 @@ class WorkingFormViewSet(
         """
         form = self.get_object()
 
-        deleted_topics = (
-            WorkingFormTopic.objects.filter(working_form=form, is_removed=True)
-            .select_related("topic", "working_form")
-            .annotate(
-                topic_delete_votes=Count("deleted_by", distinct=True),
-                total_approvers_annotated=Count(
-                    "working_form__approvers", distinct=True
-                ),
-                questions_count=Count("items", filter=Q(items__is_removed=False)),
-                candidate_for_deletion_count=Count(
-                    "items",
-                    filter=Q(items__deleted_by__isnull=False)
-                    & Q(items__is_removed=False),
-                ),
-            )
+        deleted_topics = WorkingFormTopic.objects.get_annotated_list().filter(
+            working_form=form, is_removed=True
         )
 
         serializer = WorkingFormTopicListSerializer(
@@ -241,24 +227,12 @@ class WorkingFormViewSet(
         """
         POST: Approves WorkingForm instance by approvers.
         Check user in approvers list.
-        Add the current user tp the approved_by list and sets
+        Add the current user to the approved_by list and sets
         the form status to APPROVED.
         Send message to WebSocket about approve instance.
         """
         form = self.get_object()
         user = request.user
-
-        if not (user in form.approvers.all() or user.is_staff):
-            return Response(
-                {"error": "Only designated approvers can approve this form."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        if form.status == WorkingForm.Status.APPROVED:
-            return Response(
-                {"error": "Form is already globally approved."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
 
         user_has_approved = form.approved_by.filter(pk=user.pk).exists()
 
@@ -283,7 +257,9 @@ class WorkingFormViewSet(
             "action_result": action_result,
             "is_fully_approved": is_approved,
             "form_status": form.status,
-            "approved_by": SimpleUserSerializer(form.approved_by.all(), many=True).data,
+            "approved_by": SimpleEmployeeSerializer(
+                form.approved_by.all(), many=True
+            ).data,
         }
 
         channel_layer = get_channel_layer()
@@ -313,12 +289,6 @@ class WorkingFormViewSet(
         form = self.get_object()
         user = request.user
 
-        if not (user in form.approvers.all() or user.is_staff):
-            return Response(
-                {"error": "Only designated approvers can move this form to edit."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
         user_has_approved = form.approved_by.filter(pk=user.pk).exists()
 
         if form.status == WorkingForm.Status.IN_PROGRESS and not user_has_approved:
@@ -341,7 +311,9 @@ class WorkingFormViewSet(
             "action_result": "unapproved_for_edit",
             "is_fully_approved": False,
             "form_status": form.status,
-            "approved_by": SimpleUserSerializer(form.approved_by.all(), many=True).data,
+            "approved_by": SimpleEmployeeSerializer(
+                form.approved_by.all(), many=True
+            ).data,
         }
 
         channel_layer = get_channel_layer()
@@ -369,7 +341,7 @@ class WorkingFormItemViewSet(
 
     def get_permissions(self):
         if self.action in ["update", "partial_update"]:
-            return [permissions.IsAuthenticated(), CanEditForm()]
+            return [permissions.IsAuthenticated(), CanInteractWithWorkingForm()]
         return [permissions.IsAuthenticated()]
 
     def get_queryset(self):
@@ -398,13 +370,10 @@ class WorkingFormItemViewSet(
 
     def perform_update(self, serializer) -> dict:
         """
-        Update WorkingFormItem instance, with changing source_snapshot.
+        Update WorkingFormItem instance.
         Send message to WebSocket about changed item.
         """
         item = serializer.save()
-
-        item.source_snapshot = Question.QuestionSource.CHANGED
-        item.save(update_fields=["source_snapshot"])
 
         prefetch_related_objects([item], "deleted_by")
 
@@ -455,6 +424,11 @@ class WorkingFormTopicViewSet(viewsets.ReadOnlyModelViewSet):
             return [JSONRenderer, BrowsableAPIRenderer]
         return [JSONRenderer]
 
+    def get_permissions(self):
+        if self.action == "add_question":
+            return [permissions.IsAuthenticated(), CanInteractWithWorkingForm()]
+        return [permissions.IsAuthenticated()]
+
     def get_serializer_class(self):
         if self.action == "add_question":
             return AddQuestionToTopicSerializer
@@ -462,16 +436,11 @@ class WorkingFormTopicViewSet(viewsets.ReadOnlyModelViewSet):
             return WorkingFormTopicDetailSerializer
         return WorkingFormTopicListSerializer
 
-    def get_permissions(self):
-        if self.action == "add_question":
-            return [permissions.IsAuthenticated(), CanEditForm()]
-        return [permissions.IsAuthenticated()]
-
     def get_queryset(self):
         """
         Filter topics to only those belonging to the specified working form.
         """
-        qs = (
+        queryset = (
             super()
             .get_queryset()
             .filter(
@@ -482,22 +451,11 @@ class WorkingFormTopicViewSet(viewsets.ReadOnlyModelViewSet):
 
         if self.action == "list":
 
-            return qs.annotate(
-                topic_delete_votes=Count("deleted_by", distinct=True),
-                total_approvers_annotated=Count(
-                    "working_form__approvers", distinct=True
-                ),
-                questions_count=Count("items", filter=Q(items__is_removed=False)),
-                candidate_for_deletion_count=Count(
-                    "items",
-                    filter=Q(items__deleted_by__isnull=False)
-                    & Q(items__is_removed=False),
-                ),
-            ).select_related("topic")
+            return queryset.get_annotated_list()
 
         if self.action == "retrieve":
 
-            return qs.prefetch_related(
+            return queryset.prefetch_related(
                 Prefetch(
                     "items",
                     queryset=WorkingFormItem.objects.annotate(
@@ -511,7 +469,7 @@ class WorkingFormTopicViewSet(viewsets.ReadOnlyModelViewSet):
                 )
             )
 
-        return qs
+        return queryset
 
     @action(detail=True, methods=["post"], url_path="add-question")
     def add_question(self, request, working_form_slug=None, pk=None):
@@ -521,15 +479,6 @@ class WorkingFormTopicViewSet(viewsets.ReadOnlyModelViewSet):
         form_topic = self.get_object()
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
-        if not (
-            request.user in form_topic.working_form.approvers.all()
-            or request.user.is_staff
-        ):
-            return Response(
-                {"error": "Only approvers can add topics to this form."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
 
         try:
             new_item = add_question_to_topic(

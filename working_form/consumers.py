@@ -27,9 +27,27 @@ def is_user_staff(user) -> bool:
 
 
 @database_sync_to_async
+def is_user_approver(form_id: int, user_pk: int) -> bool:
+    """
+    Async check if user is in the 'approvers' list for the form.
+    """
+    return WorkingForm.objects.filter(pk=form_id, approvers=user_pk).exists()
+
+
+@database_sync_to_async
+def is_user_superuser(user) -> bool:
+    """
+    Async check if user is superuser
+    """
+    if user.is_anonymous:
+        return False
+    return user.is_superuser
+
+
+@database_sync_to_async
 def check_user_approval(form_id: int, user_pk: int) -> bool:
     """
-    Chek that user approved working form.
+    Check that user approved working form.
     """
     return WorkingForm.objects.filter(pk=form_id, approved_by=user_pk).exists()
 
@@ -65,51 +83,72 @@ class WorkingFormConsumer(AsyncWebsocketConsumer):
         action = data.get("action")
         user = self.scope["user"]
 
-        if action in ["toggle_delete_vote", "toggle_item_vote"]:
-            is_staff = is_user_staff(user)
+        if action in ["toggle_item_delete_vote", "toggle_topic_delete_vote"]:
 
-            if not is_staff:
-                status = await get_status(form_id=self.form_id)
-                if status == WorkingForm.Status.APPROVED:
-                    await self.send_error(
-                        "Changes are not allowed for an approved form."
-                    )
-                    return
+            if not user or user.is_anonymous:
+                await self.send_error("Authentication required.")
+                return
 
-                is_personally_approved = await check_user_approval(
-                    self.form_id, user.pk
+            is_superuser = await is_user_superuser(user)
+            is_approver = await is_user_approver(self.form_id, user.pk)
+
+            if not (is_approver or is_superuser):
+                await self.send_error(
+                    "You must be an Approver or Recruiter to make changes."
                 )
-                if is_personally_approved:
-                    await self.send_error(
-                        "You cannot vote on items/topics after you have approved the form."
-                    )
+                return
+
+            status = await get_status(form_id=self.form_id)
+
+            if status == WorkingForm.Status.APPROVED:
+                await self.send_error(
+                    "Changes are not allowed for an approved form. Please un-approve it first."
+                )
+                return
+
+            is_personally_approved = await check_user_approval(self.form_id, user.pk)
+
+            if is_personally_approved:
+                await self.send_error(
+                    "You cannot vote on items/topics after you have approved the form."
+                )
+                return
+        try:
+            if action == "toggle_item_delete_vote":
+                item_id = data.get("item_id")
+                if not item_id:
+                    await self.send_error("Missing 'item_id'.")
                     return
 
-        if action == "toggle_item_delete_vote":
-            item_id = data.get("item_id")
-            updated_item = await self._call_toggle_item_vote(item_id, user.pk)
+                updated_item = await self._call_toggle_item_vote(item_id, user.pk)
 
-            await self.channel_layer.group_send(
-                self.form_group_name,
-                {
-                    "type": "handle.item.state.update",
-                    "data": updated_item["data_for_client"],
-                },
-            )
-        elif action == "toggle_topic_delete_vote":
-            topic_id = data.get("topic_id")
-            form_id = self.form_id
-            updated_topic = await self._call_toggle_topic_vote(
-                form_id, topic_id, user.pk
-            )
+                await self.channel_layer.group_send(
+                    self.form_group_name,
+                    {
+                        "type": "handle.item.state.update",
+                        "data": updated_item["data_for_client"],
+                    },
+                )
+            elif action == "toggle_topic_delete_vote":
+                topic_id = data.get("topic_id")
+                if not topic_id:
+                    await self.send_error("Missing 'topic_id'.")
+                    return
 
-            await self.channel_layer.group_send(
-                self.form_group_name,
-                {
-                    "type": "handle.topic.state.update",
-                    "data": updated_topic["data_for_client"],
-                },
-            )
+                form_id = self.form_id
+                updated_topic = await self._call_toggle_topic_vote(
+                    form_id, topic_id, user.pk
+                )
+
+                await self.channel_layer.group_send(
+                    self.form_group_name,
+                    {
+                        "type": "handle.topic.state.update",
+                        "data": updated_topic["data_for_client"],
+                    },
+                )
+        except Exception as e:
+            await self.send_error(f"An error occurred: {str(e)}")
 
     async def send_error(self, message: str):
         """Send standard error to client."""

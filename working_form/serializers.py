@@ -1,64 +1,99 @@
-from django.contrib.auth.models import User
+from django.contrib.auth import get_user_model
 from rest_framework import serializers
 from django.urls import reverse
 
+from question.models import Question
+from working_form.custom_fields import M2MListField
 from working_form.models import WorkingForm, WorkingFormItem, WorkingFormTopic
 
 
-class SimpleUserSerializer(serializers.ModelSerializer):
+Employee = get_user_model()
+
+
+class SimpleEmployeeSerializer(serializers.ModelSerializer):
     """Helper serializer for displaying user info."""
 
     class Meta:
-        model = User
-        fields = ("id", "username", "first_name", "last_name")
+        model = Employee
+        fields = (
+            "email",
+            "fullname",
+        )
 
 
 class WorkingFormCreateSerializer(serializers.Serializer):
     """
-    Validates the input data for creating a WorkingForm from a template.
+    Validates input data (User IDs) for creating a WorkingForm.
+    Optimized to use only ONE database query to fetch all users.
     """
 
     vacancy = serializers.CharField(max_length=500)
     level = serializers.ChoiceField(choices=WorkingForm.Level.choices)
     project = serializers.CharField(max_length=255, required=False, allow_blank=True)
-    interviewers = serializers.SlugRelatedField(
-        slug_field="username", queryset=User.objects.all(), many=True, required=False
+
+    interviewers = serializers.ListField(
+        child=serializers.IntegerField(min_value=1), required=False, allow_empty=True
     )
-    approvers = serializers.SlugRelatedField(
-        slug_field="username",
-        queryset=User.objects.all(),
-        many=True,
+    approvers = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        allow_empty=False,
+        min_length=1,
+        error_messages={
+            "min_length": "At least one approver is required.",
+            "empty": "At least one approver is required.",
+        },
     )
 
     class Meta:
         fields = ("vacancy", "level", "project", "interviewers", "approvers")
 
-    def validate_interviewers(self, value):
-        ids = [user.id for user in value]
-        if len(ids) != len(set(ids)):
-            raise serializers.ValidationError(
-                "Interviewers must be unique. Please remove any duplicates."
-            )
-        return value
-
     def validate(self, data):
         """
-        Checks that all approvers are also in the interviewers list.
+        1. Validates that approvers are a subset of interviewers.
+        2. Fetches all users in a single query (only interviewers cose approvers is subset of interviewers).
+        3. Replaces user IDs with user objects in validated_data.
         """
+        interviewer_ids = data.get("interviewers", [])
+        approver_ids = data.get("approvers", [])
 
-        interviewers = data.get("interviewers", [])
-        approvers = data.get("approvers", [])
+        if len(interviewer_ids) != len(set(interviewer_ids)):
+            raise serializers.ValidationError(
+                {
+                    "interviewers": "Interviewers must be unique. Please remove any duplicates."
+                }
+            )
+        if len(approver_ids) != len(set(approver_ids)):
+            raise serializers.ValidationError(
+                {"approvers": "Approvers must be unique. Please remove any duplicates."}
+            )
 
-        interviewer_ids = {user.id for user in interviewers}
-        approver_ids = {user.id for user in approvers}
+        interviewer_id_set = set(interviewer_ids)
+        approver_id_set = set(approver_ids)
 
-        if not approver_ids.issubset(interviewer_ids):
+        if not approver_id_set.issubset(interviewer_id_set):
             raise serializers.ValidationError(
                 "All approvers must also be listed as interviewers."
             )
 
-        if not approvers:
-            raise serializers.ValidationError("At least one approver is required.")
+        all_ids_to_fetch = list(interviewer_id_set)
+
+        if not all_ids_to_fetch:
+            data["interviewers"] = []
+            data["approvers"] = []
+            return data
+
+        users = Employee.objects.filter(pk__in=all_ids_to_fetch)
+
+        user_map = {user.id: user for user in users}
+
+        if len(users) != len(all_ids_to_fetch):
+            missing_ids = all_ids_to_fetch - set(user_map.keys())
+            raise serializers.ValidationError(
+                f"The following user IDs were not found: {missing_ids}"
+            )
+
+        data["interviewers"] = [user_map[id] for id in interviewer_ids]
+        data["approvers"] = [user_map[id] for id in approver_ids]
 
         return data
 
@@ -71,12 +106,8 @@ class WorkingFormUpdateSerializer(serializers.ModelSerializer):
     vacancy = serializers.CharField(max_length=500)
     level = serializers.ChoiceField(choices=WorkingForm.Level.choices)
     project = serializers.CharField(max_length=255, required=False, allow_blank=True)
-    interviewers = serializers.SlugRelatedField(
-        slug_field="username", queryset=User.objects.all(), many=True, required=False
-    )
-    approvers = serializers.SlugRelatedField(
-        slug_field="username", queryset=User.objects.all(), many=True, required=False
-    )
+    interviewers = M2MListField(required=False)
+    approvers = M2MListField(required=False)
 
     class Meta:
         model = WorkingForm
@@ -91,31 +122,101 @@ class WorkingFormUpdateSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         """
-        Ensures that approvers are a subset of interviewers during an update.
-        Handles partial updates where only one of the fields might be provided.
+        Validate all IDs by one request:
+        - Check thst lists are empty
+        - Take unique IDs
+        - Teke objects by IDs + validation
+        - return data (with replacement integers to objects)
         """
+        interviewer_ids = data.get("interviewers", [])
+        approver_ids = data.get("approvers", [])
 
-        interviewers = data.get("interviewers", self.instance.interviewers.all())
-        approvers = data.get("approvers", self.instance.approvers.all())
+        if "approvers" in data and not approver_ids:
+            raise serializers.ValidationError(
+                {"approvers": "At least one approver is required."}
+            )
+        if "interviewers" in data and not interviewer_ids:
+            raise serializers.ValidationError(
+                {"interviewers": "At least one interviewer is required."}
+            )
 
-        self._interviewers_list = list(interviewers)
-        self._approvers_list = list(approvers)
+        all_ids = set(interviewer_ids) | set(approver_ids)
 
-        interviewer_ids = {user.id for user in self._interviewers_list}
-        approver_ids = {user.id for user in self._approvers_list}
+        if all_ids:
 
-        if not approver_ids.issubset(interviewer_ids):
+            users = Employee.objects.filter(pk__in=all_ids)
+            user_map = {user.id: user for user in users}
+
+            if len(users) != len(all_ids):
+                missing_ids = all_ids - set(user_map.keys())
+                raise serializers.ValidationError(f"Users not found: {missing_ids}")
+
+            if "interviewers" in data:
+                data["interviewers"] = [user_map[id] for id in interviewer_ids]
+            if "approvers" in data:
+                data["approvers"] = [user_map[id] for id in approver_ids]
+
+        final_interviewers = data.get(
+            "interviewers", list(self.instance.interviewers.all())
+        )
+        final_approvers = data.get("approvers", list(self.instance.approvers.all()))
+        final_interviewer_ids = {user.id for user in final_interviewers}
+        final_approver_ids = {user.id for user in final_approvers}
+
+        if not final_approver_ids.issubset(final_interviewer_ids):
             raise serializers.ValidationError(
                 "All approvers must also be listed as interviewers."
             )
 
-        if "approvers" in data and not self._approvers_list:
-            raise serializers.ValidationError("At least one approver is required.")
-
-        if "interviewers" in data and not self._interviewers_list:
-            raise serializers.ValidationError("At least one interviewer is required.")
-
         return data
+
+    def update(self, instance, validated_data):
+        """
+        - Take new data (interviewers/approvers)
+        - Teke old data (before save/ remove) - Prefetched
+        - Send old or new data (depends updated data) to WebSocket in update method in View
+        - Update M2M fields (interviewers/approvers)
+        """
+
+        new_interviewers = validated_data.pop("interviewers", None)
+        new_approvers = validated_data.pop("approvers", None)
+
+        old_interviewers = list(self.instance.interviewers.all())
+        old_approvers = list(self.instance.approvers.all())
+
+        self._interviewers_list = (
+            new_interviewers if new_interviewers is not None else old_interviewers
+        )
+        self._approvers_list = (
+            new_approvers if new_approvers is not None else old_approvers
+        )
+
+        instance = super().update(instance, validated_data)
+        if new_interviewers is not None:
+            old_ids = {user.id for user in old_interviewers}
+            new_ids = {user.id for user in new_interviewers}
+
+            to_add_ids = new_ids - old_ids
+            to_remove_ids = old_ids - new_ids
+
+            if to_add_ids:
+                instance.interviewers.add(*to_add_ids)
+            if to_remove_ids:
+                instance.interviewers.remove(*to_remove_ids)
+
+        if new_approvers is not None:
+            old_ids = {user.id for user in old_approvers}
+            new_ids = {user.id for user in new_approvers}
+
+            to_add_ids = new_ids - old_ids
+            to_remove_ids = old_ids - new_ids
+
+            if to_add_ids:
+                instance.approvers.add(*to_add_ids)
+            if to_remove_ids:
+                instance.approvers.remove(*to_remove_ids)
+
+        return instance
 
 
 class WorkingFormListSerializer(serializers.ModelSerializer):
@@ -219,8 +320,8 @@ class WorkingFormDetailSerializer(serializers.ModelSerializer):
     """
 
     tech_stack = serializers.StringRelatedField(read_only=True)
-    interviewers = SimpleUserSerializer(many=True, read_only=True)
-    approvers = SimpleUserSerializer(many=True, read_only=True)
+    interviewers = SimpleEmployeeSerializer(many=True, read_only=True)
+    approvers = SimpleEmployeeSerializer(many=True, read_only=True)
     topics = WorkingFormTopicListSerializer(
         source="form_topics", many=True, read_only=True
     )
@@ -285,6 +386,17 @@ class WorkingFormItemSerializer(serializers.ModelSerializer):
             "source_snapshot",
             "detail_url",
         )
+
+    def update(self, instance, validated_data):
+        """
+        If 'text_snapshot' is updated,
+        automatically set 'source_snapshot' to 'CHANGED'.
+        """
+
+        if "text_snapshot" in validated_data:
+            validated_data["source_snapshot"] = Question.QuestionSource.CHANGED
+
+        return super().update(instance, validated_data)
 
     def get_is_effectively_deleted(self, instance: WorkingFormItem) -> bool:
         """

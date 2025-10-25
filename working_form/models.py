@@ -1,5 +1,7 @@
+from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import models
+from django.db.models import Count, Q
 from django.utils.text import slugify
 
 from template_form.models import BaseForm, BaseFormItems, TemplateForm
@@ -17,11 +19,11 @@ class WorkingForm(BaseForm):
         EVALUATED = "evaluated", "Evaluated"
 
     class Level(models.TextChoices):
-        JUNIOR = "Junior", "Junior"
-        MIDDLE = "Middle", "Middle"
-        SENIOR = "Senior", "Senior"
-        LEAD = "Lead", "Lead"
-        MANAGER = "Manager", "Manager"
+        JUNIOR = "junior", "Junior"
+        MIDDLE = "middle", "Middle"
+        SENIOR = "senior", "Senior"
+        LEAD = "lead", "Lead"
+        MANAGER = "manager", "Manager"
 
     template_origin = models.ForeignKey(
         TemplateForm,
@@ -43,7 +45,7 @@ class WorkingForm(BaseForm):
         help_text="The project name",
     )
     interviewers = models.ManyToManyField(
-        User,
+        settings.AUTH_USER_MODEL,
         related_name="interviewers",
         blank=True,
         help_text="The interviewers who will provide interview on the vacancy",
@@ -61,14 +63,14 @@ class WorkingForm(BaseForm):
         help_text="The status of the working form",
     )
     approved_by = models.ManyToManyField(
-        User,
-        related_name="approvable_working_forms",
+        settings.AUTH_USER_MODEL,
+        related_name="approved_forms",
         blank=True,
         help_text="Users who have actually approved this form.",
     )
     approvers = models.ManyToManyField(
-        User,
-        related_name="approved_working_forms",
+        settings.AUTH_USER_MODEL,
+        related_name="forms_to_approve",
         blank=True,
         help_text="Interviewers who approve current version of working form",
     )
@@ -95,24 +97,27 @@ class WorkingForm(BaseForm):
 
     def save(self, *args, **kwargs) -> None:
         """
-        Save Working Form Instance with generated name and slug
+        Updates name and slug automatically if related fields change *on update*.
+        Creation logic (name/slug generation) is handled by the
+        service layer that calls .create().
         """
-        if not self.pk:
-            project_part = f"({self.project})" if self.project else ""
-            self.name = (
+
+        if self.pk:
+
+            project_part = f"({self.project}_{self.pk})" if self.project else ""
+            new_name = (
                 f"{self.get_level_display()} {self.vacancy} {project_part}".strip()
             )
-        if not self.slug:
-            self.slug = slugify(self.name)
 
-        if WorkingForm.objects.filter(slug=self.slug).exclude(pk=self.pk).exists():
-            original_slug = self.slug
-            counter = 1
-            while (
-                WorkingForm.objects.filter(slug=self.slug).exclude(pk=self.pk).exists()
-            ):
-                self.slug = f"{original_slug}-{counter}"
-                counter += 1
+            if self.name == new_name:
+
+                super().save(*args, **kwargs)
+                return
+
+            self.name = new_name
+            new_slug = slugify(self.name)
+
+            self.slug = new_slug
 
         super().save(*args, **kwargs)
 
@@ -122,6 +127,33 @@ class WorkingForm(BaseForm):
     class Meta:
         verbose_name = "Working form"
         verbose_name_plural = "Working forms"
+
+
+class WorkingFormTopicManager(models.Manager):
+    """
+    WorkingForm topic custom manager
+    return topics with annotations:
+        - topic_delete_votes
+        - total_approvers_annotated
+        - questions_count
+        - candidate_for_deletion_count
+    DRY:
+    for queryset in _get_form_topics_prefetch (list/retrieve/update)
+    for queryset in restore_topic (deleted topics list)
+    for WorkingFormTopicViewSet get_queryset (list)
+    """
+
+    def get_annotated_list(self):
+
+        return self.select_related("topic", "working_form").annotate(
+            topic_delete_votes=Count("deleted_by", distinct=True),
+            total_approvers_annotated=Count("working_form__approvers", distinct=True),
+            questions_count=Count("items", filter=Q(items__is_removed=False)),
+            candidate_for_deletion_count=Count(
+                "items",
+                filter=Q(items__deleted_by__isnull=False) & Q(items__is_removed=False),
+            ),
+        )
 
 
 class WorkingFormTopic(models.Model):
@@ -142,7 +174,7 @@ class WorkingFormTopic(models.Model):
         null=True,
     )
     deleted_by = models.ManyToManyField(
-        User,
+        settings.AUTH_USER_MODEL,
         related_name="deleted_working_form_topics",
         blank=True,
         help_text="Voted for deleting the topic by interviewers",
@@ -151,6 +183,8 @@ class WorkingFormTopic(models.Model):
         default=False,
         help_text="Soft delete - form topic removed from working form but kept for history",
     )
+
+    objects = WorkingFormTopicManager()
 
     def _calculate_effective_deletion(self, total_approvers=None, delete_votes=None):
         """
@@ -190,13 +224,15 @@ class WorkingFormItem(BaseFormItems):
     )
 
     deleted_by = models.ManyToManyField(
-        User,
+        settings.AUTH_USER_MODEL,
         related_name="deleted_items",
         blank=True,
         help_text="Voted for deleting the item by approvers",
     )
 
-    def _calculate_effective_deletion(self, total_approvers=None, delete_votes=None):
+    def _calculate_effective_deletion(
+        self, total_approvers=None, delete_votes=None
+    ) -> bool:
         """
         Centralize  logic for is_effectively_deleted.
         Checks if the item is effectively deleted based on the number of approvers' votes.

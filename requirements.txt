@@ -55,3 +55,4 @@ typing_extensions==4.15.0
 uritemplate==4.2.0
 whitenoise==6.11.0
 zope.interface==8.0.1
+djangorestframework_simplejwt==5.5.1

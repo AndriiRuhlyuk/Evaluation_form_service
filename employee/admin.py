@@ -10,8 +10,24 @@ class EmployeeAdmin(DjangoUserAdmin):
 
     fieldsets = (
         (None, {"fields": ("email", "password")}),
-        (_("Personal info"), {"fields": ("first_name", "last_name", "fullname")}),
-        (_("Work info"), {"fields": ("role", "level", "project", "tech_stack")}),
+        (
+            _("Personal info"),
+            {
+                "fields": (
+                    "first_name",
+                    "last_name",
+                )
+            },
+        ),
+        (
+            _("Work info"),
+            {
+                "fields": (
+                    "role",
+                    "level",
+                )
+            },
+        ),
         (
             _("Permissions"),
             {
@@ -43,13 +59,14 @@ class EmployeeAdmin(DjangoUserAdmin):
     )
     list_display = (
         "id",
-        "email",
         "fullname",
+        "email",
         "role",
         "level",
         "is_active",
         "updated_at",
     )
+    readonly_fields = ("last_login", "date_joined", "updated_at", "fullname")
     list_filter = ("role", "level", "is_active", "is_staff", "is_superuser")
-    search_fields = ("email", "first_name", "last_name", "fullname")
+    search_fields = ("email", "first_name", "last_name")
     ordering = ("email",)
