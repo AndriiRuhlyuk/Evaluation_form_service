@@ -66,6 +66,7 @@ INSTALLED_APPS = [
     "template_form",
     "working_form",
     "evaluation_form",
+    "project",
 ]
 
 MIDDLEWARE = [
