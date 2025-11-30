@@ -1,3 +1,4 @@
+import uuid
 from typing import Any
 
 from django.db import transaction
@@ -5,12 +6,11 @@ from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.utils.text import slugify
 
-from employee.models import Employee
 from question.models import Question
 from rest_framework import serializers
 from techstack.models import TechStack
 from django.contrib.auth.models import User
-from template_form.models import TemplateForm, TemplateFormItems, FormTopic
+from template_form.models import TemplateForm, TemplateFormItems, TemplateFormTopic
 from topic.models import Topic
 from working_form.models import WorkingForm, WorkingFormTopic, WorkingFormItem
 
@@ -114,7 +114,7 @@ def _get_or_create_questions(
 
 
 def _create_snapshots(
-    form_topic: FormTopic, user: User, all_questions_map: dict[int, Question]
+    form_topic: TemplateFormTopic, user: User, all_questions_map: dict[int, Question]
 ):
     """
     Create instances TemplateFormItems (snapshots)
@@ -150,7 +150,7 @@ def process_topics_and_questions(form: TemplateForm, user: User, topic_data: lis
 
     for topic_group in topic_data:
         topic_obj = _ensure_single_topic(topic_group["topic"])
-        form_topic, created = FormTopic.objects.get_or_create(
+        form_topic, created = TemplateFormTopic.objects.get_or_create(
             form=form, topic=topic_obj
         )
         questions_data = topic_group["questions"]
@@ -325,59 +325,59 @@ def get_question_details(request, pk):
 
 @transaction.atomic
 def clone_template_to_working(
-    template_form: TemplateForm, recruiter: Employee, form_data: dict
+    template_form: TemplateForm, validated_data: dict
 ) -> WorkingForm:
     """
     Creates a deep copy of a TemplateForm into a new WorkingForm instance.
 
     Args:
         template_form: The source TemplateForm instance.
-        form_data: A dictionary with validated data for the new WorkingForm
+        validated_data: A dictionary with validated data for the new WorkingForm
                    (e.g., {'vacancy': '...', 'level': '...', 'project': '...', 'interviewers': [...]}).
     Returns:
         The newly created WorkingForm instance.
     """
 
-    interviewers = form_data.pop("interviewers", [])
-    approvers = form_data.pop("approvers", [])
+    interviewers = validated_data.pop("interviewers", [])
+    approvers = validated_data.pop("approvers", [])
+    recruiters = validated_data.pop("recruiters")
+    hiring_manager = validated_data.pop("hiring_manager")
 
-    vacancy = form_data.get("vacancy")
-    project = form_data.get("project")
-    level = form_data.get("level")
+    vacancy = validated_data.get("vacancy")
+    project = validated_data.get("project")
+    level = validated_data.get("level")
 
     level_display = dict(WorkingForm.Level.choices).get(level, level.capitalize())
+    short_id = str(uuid.uuid4())[:8]
 
     if project:
-        name = f"{level_display} {vacancy} ({project})"
+        name = f"Working {level_display} {vacancy} ({project}) #{short_id}"
     else:
-        name = f"{level_display} {vacancy}"
+        name = f"Working {level_display} {vacancy} #{short_id}"
 
     base_slug = slugify(name)
     slug = base_slug
     counter = 1
-
-    while WorkingForm.objects.filter(slug=slug).exists():  # 1 SELECT
+    while WorkingForm.objects.filter(slug=slug).exists():
         slug = f"{base_slug}-{counter}"
         counter += 1
 
-    form_data["name"] = name
-    form_data["slug"] = slug
-
     working_form = WorkingForm.objects.create(
         template_origin=template_form,
-        manager=recruiter,
+        manager=template_form.manager,
         tech_stack=template_form.tech_stack,
-        **form_data,
+        hiring_manager=hiring_manager,
+        name=name,
+        slug=slug,
+        **validated_data,
     )
 
-    if interviewers:
-        working_form.interviewers.add(*interviewers)
-    if approvers:
-        working_form.approvers.add(*approvers)
+    working_form.interviewers.add(*interviewers)
+    working_form.approvers.add(*approvers)
+    working_form.recruiters.add(*recruiters)
 
     template_form_topics = template_form.form_topics.all()
     if not template_form_topics:
-        working_form.save()
         return working_form
 
     topic_map = {

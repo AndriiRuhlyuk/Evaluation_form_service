@@ -15,6 +15,7 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 
+from django.conf.urls.static import static
 from django.contrib import admin
 import nested_admin
 from django.urls import path, include
@@ -36,8 +37,10 @@ urlpatterns = [
     path(
         "api/template-form/", include("template_form.urls", namespace="template-form")
     ),
+    path("api/working-form/", include("working_form.urls", namespace="working-form")),
     path(
-        "api/working-form/", include("working_form.urls", namespace="working-form")
+        "api/evaluation-form/",
+        include("evaluation_form.urls", namespace="evaluation-form"),
     ),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path(
@@ -62,3 +65,4 @@ if settings.DEBUG and "debug_toolbar" in settings.INSTALLED_APPS:
     import debug_toolbar
 
     urlpatterns += [path("__debug__/", include(debug_toolbar.urls))]
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

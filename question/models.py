@@ -1,4 +1,6 @@
 from django.db import models
+from django.utils import timezone
+
 from employee.models import Employee
 
 from topic.models import Topic
@@ -28,6 +30,7 @@ class Question(models.Model):
         choices=QuestionSource.choices,
         default=QuestionSource.TEMPLATE,
     )
+    last_used_at = models.DateTimeField(default=timezone.now)
     is_active = models.BooleanField(default=True)
     topic = models.ForeignKey(
         Topic,

@@ -50,6 +50,19 @@ class WorkingForm(BaseForm):
         blank=True,
         help_text="The interviewers who will provide interview on the vacancy",
     )
+    recruiters = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        related_name="recruiter_working_forms",
+        blank=True,
+        help_text="The recruiter(s) who is responding for hiring process.",
+    )
+    hiring_manager = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        on_delete=models.SET_NULL,
+        related_name="hiring_manager_working_forms",
+        help_text="The hiring manager who is responding for make final decision about hiring.",
+    )
     topics = models.ManyToManyField(
         Topic,
         through="WorkingFormTopic",
@@ -75,21 +88,26 @@ class WorkingForm(BaseForm):
         help_text="Interviewers who approve current version of working form",
     )
 
-    def _calculate_approval(self, approvers_count=None, approved_by_count=None) -> bool:
+    def _calculate_approval(self) -> bool:
         """
         Centralize logic for is_fully_approved.
         Checks if the number of users who approved matches the number of required approvers.
         """
 
-        if approvers_count is None:
+        if "approvers" in self._prefetched_objects_cache:
+            approvers_count = len(self.approvers.all())
+        else:
             approvers_count = self.approvers.count()
-        if approved_by_count is None:
+
+        if "approved_by" in self._prefetched_objects_cache:
+            approved_by_count = len(self.approved_by.all())
+        else:
             approved_by_count = self.approved_by.count()
 
         if approvers_count == 0:
             return False
 
-        return approved_by_count == approvers_count
+        return approvers_count == approved_by_count
 
     @property
     def is_fully_approved(self) -> bool:
@@ -193,9 +211,16 @@ class WorkingFormTopic(models.Model):
         """
 
         if total_approvers is None:
-            total_approvers = self.working_form.approvers.count()
+            if "approvers" in self.working_form._prefetched_objects_cache:
+                total_approvers = len(self.working_form.approvers.all())
+            else:
+                total_approvers = self.working_form.approvers.count()
+
         if delete_votes is None:
-            delete_votes = self.deleted_by.count()
+            if "deleted_by" in self._prefetched_objects_cache:
+                delete_votes = len(self.deleted_by.all())
+            else:
+                delete_votes = self.deleted_by.count()
 
         if total_approvers == 0:
             return False
@@ -209,6 +234,33 @@ class WorkingFormTopic(models.Model):
         unique_together = ("working_form", "topic")
         verbose_name = "Topic of working form"
         verbose_name_plural = "Topics of working form"
+
+
+class WorkingFormItemManager(models.Manager):
+    """
+    WorkingForm topic custom manager
+    for take 'full' objects WorkingFormItem.
+    """
+
+    def get_annotated_list(self):
+        """
+        return QuerySet with all annotate and prefetch,
+        which needed for serializer and permission-classes.
+        """
+        return (
+            self.select_related("form_topic__working_form")
+            .prefetch_related(
+                "deleted_by",
+                "form_topic__working_form__approvers",
+                "form_topic__working_form__approved_by",
+            )
+            .annotate(
+                delete_votes=Count("deleted_by", distinct=True),
+                total_approvers=Count(
+                    "form_topic__working_form__approvers", distinct=True
+                ),
+            )
+        )
 
 
 class WorkingFormItem(BaseFormItems):
@@ -230,6 +282,8 @@ class WorkingFormItem(BaseFormItems):
         help_text="Voted for deleting the item by approvers",
     )
 
+    objects = WorkingFormItemManager()
+
     def _calculate_effective_deletion(
         self, total_approvers=None, delete_votes=None
     ) -> bool:
@@ -239,9 +293,16 @@ class WorkingFormItem(BaseFormItems):
         """
 
         if total_approvers is None:
-            total_approvers = self.form_topic.working_form.approvers.count()
+            if "approvers" in self.form_topic.working_form._prefetched_objects_cache:
+                total_approvers = len(self.form_topic.working_form.approvers.all())
+            else:
+                total_approvers = self.form_topic.working_form.approvers.count()
+
         if delete_votes is None:
-            delete_votes = self.deleted_by.count()
+            if "deleted_by" in self._prefetched_objects_cache:
+                delete_votes = len(self.deleted_by.all())
+            else:
+                delete_votes = self.deleted_by.count()
 
         if total_approvers == 0:
             return False

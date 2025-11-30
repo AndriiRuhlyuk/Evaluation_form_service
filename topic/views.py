@@ -1,9 +1,11 @@
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, OpenApiParameter
-from rest_framework import filters, viewsets, status
+from rest_framework import filters, viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAdminUser, AllowAny, IsAuthenticated
 from rest_framework.response import Response
+
+from template_form.permissions import IsManagerOrSuperuser
 from topic.permissions import IsEmployee
 
 from question.models import Question
@@ -50,12 +52,10 @@ class TopicViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsEmployee]
 
     def get_permissions(self):
-        if hasattr(self, "action") and self.action:
-            if self.action in ["destroy", "restore"]:
-                return [IsAdminUser()]
-            elif self.action in ["create", "update", "partial_update"]:
-                return [AllowAny()]
-        return []
+        if self.action in ["list", "retrieve"]:
+            return [IsAuthenticated()]
+
+        return [permissions.IsAuthenticated(), IsManagerOrSuperuser()]
 
     def get_serializer_class(self):
         if self.action == "list":

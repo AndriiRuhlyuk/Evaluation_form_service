@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Evaluation Report: {{ form.candidate.full_name }}</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333; line-height: 1.6; max-width: 900px; margin: 0 auto; padding: 20px; }
+
+        .header { border-bottom: 2px solid #0056b3; padding-bottom: 20px; margin-bottom: 30px; }
+        .header h1 { margin: 0; color: #0056b3; }
+        .meta-info { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; color: #666; }
+
+        .section-title { background: #f0f4f8; padding: 10px 15px; border-left: 5px solid #0056b3; margin-top: 40px; }
+
+        .topic-block { margin-bottom: 30px; }
+        .question-item { border-bottom: 1px solid #eee; padding: 15px 0; page-break-inside: avoid; }
+        .question-text { font-weight: 600; font-size: 1.1em; margin-bottom: 10px; }
+
+        .scores-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+        .score-card {
+            background: white; border: 1px solid #ddd; border-radius: 6px;
+            padding: 10px; min-width: 200px; flex: 1;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+
+        .interviewer-name { font-size: 0.85em; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+        .score-val { font-weight: bold; margin: 5px 0; }
+
+        /* Colors for scores */
+        .score-3 { color: #28a745; } /* Strong */
+        .score-2 { color: #ffc107; text-shadow: 0 0 1px #999; } /* Medium */
+        .score-1 { color: #dc3545; } /* Weak */
+        .score-0 { color: #6c757d; } /* No Answer */
+        .lacks-expertise { color: #6c757d; font-style: italic; }
+
+        .comment { font-size: 0.9em; color: #555; border-top: 1px dashed #eee; margin-top: 5px; padding-top: 5px; }
+
+        .feedback-section { background: #fffbe6; padding: 20px; border: 1px solid #ffe58f; border-radius: 8px; margin-bottom: 20px; }
+        .decision { font-weight: bold; text-transform: uppercase; float: right; }
+        .decision.next_step { color: #28a745; }
+        .decision.refuse { color: #dc3545; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1>Evaluation Report</h1>
+        <div class="meta-info">
+            <div><strong>Candidate:</strong> {{ form.candidate.full_name }}</div>
+            <div><strong>Date:</strong> {{ form.interview_datetime|date:"d M Y, H:i" }}</div>
+            <div><strong>Position:</strong> {{ form.vacancy_snapshot }} ({{ form.level_snapshot }})</div>
+            <div><strong>Generated:</strong> {{ generated_at|date:"Y-m-d H:i" }}</div>
+        </div>
+    </div>
+
+    <h2>Final Decisions</h2>
+    {% for fb in feedbacks %}
+        <div class="feedback-block feedback-section">
+            <span class="decision {{ fb.decision }}">
+                {{ fb.get_decision_display }}
+            </span>
+            <h3>{{ fb.interviewer.get_full_name|default:fb.interviewer.email }}</h3>
+
+            <p><strong>Pros:</strong><br> {{ fb.pros|linebreaksbr }}</p>
+            <p><strong>Cons:</strong><br> {{ fb.cons|linebreaksbr }}</p>
+            {% if fb.candidates_level %}
+                <p><em>Assessed Level: {{ fb.get_candidates_level_display }}</em></p>
+            {% endif %}
+        </div>
+    {% endfor %}
+
+    <h2>Technical Assessment</h2>
+
+    {% for topic in topics %}
+        <div class="topic-block">
+            <h3 class="section-title">{{ topic.topic_name_snapshot }}</h3>
+
+            {% for item in topic.items.all %}
+                <div class="question-item">
+                    <div class="question-text">{{ item.text_snapshot }}</div>
+
+                    <div class="scores-grid">
+                        {% for score in item.scores.all %}
+                            <div class="score-card">
+                                <div class="interviewer-name">{{ score.interviewer.get_full_name }}</div>
+
+                                {% if score.lacks_expertise %}
+                                    <div class="score-val lacks-expertise">Lack of Expertise</div>
+                                {% else %}
+                                    <div class="score-val score-{{ score.score }}">
+                                        {{ score.get_score_display }}
+                                    </div>
+                                {% endif %}
+
+                                {% if score.comment %}
+                                    <div class="comment">"{{ score.comment }}"</div>
+                                {% endif %}
+                            </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+    {% endfor %}
+
+</body>
+</html>

@@ -1,10 +1,12 @@
 from drf_spectacular.utils import extend_schema, OpenApiParameter
-from rest_framework import filters, viewsets, status
+from rest_framework import filters, viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+
+from template_form.permissions import IsManagerOrSuperuser
 from .permissions import IsEmployee
 
 from question.models import Question
@@ -74,6 +76,12 @@ class QuestionViewSet(viewsets.ModelViewSet):
         if self.action == "restore":
             return QuestionRestoreSerializer
         return QuestionSerializer
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [IsAuthenticated()]
+
+        return [permissions.IsAuthenticated(), IsManagerOrSuperuser()]
 
     def perform_create(self, serializer):
         """

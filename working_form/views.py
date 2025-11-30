@@ -1,16 +1,25 @@
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.conf import settings
-from django.db.models import Prefetch, Count, Q, prefetch_related_objects
+from django.db.models import Prefetch, Count, prefetch_related_objects
 from rest_framework import viewsets, status, mixins, permissions
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.renderers import JSONRenderer, BrowsableAPIRenderer
 from rest_framework.response import Response
 
+from evaluation_form.serializers import (
+    CreateEvaluationFormSerializer,
+    RecruiterEvaluationSerializer,
+)
 from topic.serializers import TopicSerializer
 from working_form.models import WorkingForm, WorkingFormTopic, WorkingFormItem
-from working_form.permissions import CanInteractWithWorkingForm
+from working_form.permissions import (
+    CanInteractWithWorkingForm,
+    CanEditWorkingForm,
+    CanCreateEvaluationForm,
+    IsRecruiter,
+)
 from working_form.serializers import (
     WorkingFormDetailSerializer,
     WorkingFormListSerializer,
@@ -21,8 +30,14 @@ from working_form.serializers import (
     WorkingFormUpdateSerializer,
     AddTopicSerializer,
     SimpleEmployeeSerializer,
+    WorkingFormCreateSerializer,
 )
-from working_form.services import add_question_to_topic, add_topic_to_working_form
+from working_form.services import (
+    add_question_to_topic,
+    add_topic_to_working_form,
+    clone_working_to_evaluation,
+    clone_working_from_working,
+)
 
 
 class WorkingFormViewSet(
@@ -35,7 +50,7 @@ class WorkingFormViewSet(
 
     lookup_field = "slug"
 
-    queryset = WorkingForm.objects.select_related("tech_stack")
+    queryset = WorkingForm.objects.select_related("tech_stack", "hiring_manager")
 
     def get_serializer_class(self):
         if self.action == "add_topic":
@@ -44,19 +59,26 @@ class WorkingFormViewSet(
             return WorkingFormDetailSerializer
         if self.action in ["update", "partial_update"]:
             return WorkingFormUpdateSerializer
+        if self.action == "create_evaluation_form":
+            return CreateEvaluationFormSerializer
+        if self.action == "clone":
+            return WorkingFormCreateSerializer
         return WorkingFormListSerializer
 
     def get_permissions(self):
         if self.action in [
             "update",
             "partial_update",
-            "add_topic",
-            "approve",
-            "unapprove",
         ]:
+            return [permissions.IsAuthenticated(), CanEditWorkingForm()]
+        if self.action == "create_evaluation_form":
+            return [permissions.IsAuthenticated(), CanCreateEvaluationForm()]
+        if self.action in ["approve", "unapprove", "add_topic", "restore_topic"]:
             return [permissions.IsAuthenticated(), CanInteractWithWorkingForm()]
         if self.action == "destroy":
             return [permissions.IsAuthenticated(), permissions.IsAdminUser()]
+        if self.action == "clone":
+            return [permissions.IsAdminUser(), IsRecruiter()]
         return [permissions.IsAuthenticated()]
 
     def _get_form_topics_prefetch(self):
@@ -91,17 +113,19 @@ class WorkingFormViewSet(
                 interviewer_count=Count("interviewers", distinct=True),
             )
 
-        if self.action in [
-            "update",
-            "partial_update",
-            "approve",
-            "add_topic",
-        ]:
-            return queryset.prefetch_related("interviewers", "approvers", "approved_by")
+        if self.action in ["approve", "unapprove", "add_topic", "restore_topic"]:
+            return queryset.prefetch_related("approvers", "approved_by")
+
+        if self.action in ["update", "partial_update"]:
+            return queryset.prefetch_related("recruiters", "approved_by")
+
+        if self.action == "create_evaluation_form":
+            return queryset.prefetch_related("recruiters")
 
         if self.action == "retrieve":
-
-            return queryset.prefetch_related("interviewers", "approvers", "approved_by")
+            return queryset.prefetch_related(
+                "interviewers", "approvers", "approved_by", "recruiters"
+            )
 
         return queryset
 
@@ -128,10 +152,14 @@ class WorkingFormViewSet(
 
         form_instance = serializer.save()
 
-        prefetch_related_objects([form_instance], "interviewers", "approvers")
+        prefetch_related_objects(
+            [form_instance], "interviewers", "approvers", "recruiters"
+        )
 
         interviewers_list = serializer._interviewers_list
         approvers_list = serializer._approvers_list
+        recruiters_list = serializer._recruiters_list
+        hiring_manager_obj = serializer._hiring_manager_obj
 
         channel_layer = get_channel_layer()
         form_group_name = f"form_{form_instance.id}"
@@ -141,6 +169,8 @@ class WorkingFormViewSet(
             "project": form_instance.project,
             "interviewers": SimpleEmployeeSerializer(interviewers_list, many=True).data,
             "approvers": SimpleEmployeeSerializer(approvers_list, many=True).data,
+            "recruiters": SimpleEmployeeSerializer(recruiters_list, many=True).data,
+            "hiring_manager": SimpleEmployeeSerializer(hiring_manager_obj).data,
         }
         async_to_sync(channel_layer.group_send)(
             form_group_name, {"type": "form_metadata_updated", "data": updated_data}
@@ -176,12 +206,6 @@ class WorkingFormViewSet(
         """
 
         form = self.get_object()
-
-        if not (request.user in form.approvers.all() or request.user.is_staff):
-            return Response(
-                {"error": "Only approvers can add topics to this form."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -234,7 +258,8 @@ class WorkingFormViewSet(
         form = self.get_object()
         user = request.user
 
-        user_has_approved = form.approved_by.filter(pk=user.pk).exists()
+        approved_by_ids = {u.pk for u in form.approved_by.all()}
+        user_has_approved = user.pk in approved_by_ids
 
         if user_has_approved:
             action_result = "already_approved"
@@ -289,7 +314,8 @@ class WorkingFormViewSet(
         form = self.get_object()
         user = request.user
 
-        user_has_approved = form.approved_by.filter(pk=user.pk).exists()
+        approved_by_ids = {u.pk for u in form.approved_by.all()}
+        user_has_approved = user.pk in approved_by_ids
 
         if form.status == WorkingForm.Status.IN_PROGRESS and not user_has_approved:
             return Response(
@@ -326,6 +352,92 @@ class WorkingFormViewSet(
 
         return Response(response_data, status=status.HTTP_200_OK)
 
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="create-evaluation",
+    )
+    def create_evaluation_form(self, request, slug=None):
+        """
+        Creates a new EvaluationForm from this (APPROVED) WorkingForm.
+        """
+
+        working_form = self.get_object()
+
+        input_serializer = CreateEvaluationFormSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+
+        prepared_data = input_serializer.save()
+
+        try:
+            evaluation_form = clone_working_to_evaluation(
+                working_form=working_form, **prepared_data
+            )
+        except ValidationError as e:
+            return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
+
+        output_serializer = RecruiterEvaluationSerializer(
+            evaluation_form, context={"request": request}
+        )
+
+        return Response(output_serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(
+        detail=True,
+        methods=["get", "post"],
+        url_path="clone",
+    )
+    def clone(self, request, slug=None):
+        """
+        Clone WorkingForm.
+        - GET: Return fields (WorkingFormCreateSerializer),
+               filled data from 'original_form'.
+        - POST: Take updated data, validate it, create deep copy with new data.
+        """
+        original_form = self.get_object()
+
+        if request.method == "GET":
+            initial_data = {
+                "vacancy": f"{original_form.vacancy} (Copy)",
+                "level": original_form.level,
+                "project": original_form.project,
+                "interviewers": list(
+                    original_form.interviewers.values_list("pk", flat=True)
+                ),
+                "approvers": list(original_form.approvers.values_list("pk", flat=True)),
+                "recruiters": list(
+                    original_form.recruiters.values_list("pk", flat=True)
+                ),
+                "hiring_manager_id": original_form.hiring_manager_id,
+            }
+
+            return Response(initial_data)
+
+        elif request.method == "POST":
+            context = self.get_serializer_context()
+            context["request"] = request
+
+            serializer = self.get_serializer(data=request.data, context=context)
+            serializer.is_valid(raise_exception=True)
+
+            try:
+                new_form = clone_working_from_working(
+                    original_form=original_form,
+                    validated_data=serializer.validated_data,
+                )
+            except Exception as e:
+                return Response(
+                    {"error": f"Failed to clone form: {str(e)}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+            output_serializer = WorkingFormDetailSerializer(new_form, context=context)
+            return Response(output_serializer.data, status=status.HTTP_201_CREATED)
+
+        return Response(
+            {"detail": "Method not allowed."}, status=status.HTTP_405_METHOD_NOT_ALLOWED
+        )
+
 
 class WorkingFormItemViewSet(
     mixins.ListModelMixin,
@@ -347,23 +459,12 @@ class WorkingFormItemViewSet(
     def get_queryset(self):
         """
         Filter items to only those belonging to the specified working form.
+        All optimization logic is now in the manager.
         """
-        queryset = (
-            super()
-            .get_queryset()
-            .filter(
-                form_topic__working_form__slug=self.kwargs["working_form_slug"],
-                is_removed=False,
-            )
+        return WorkingFormItem.objects.get_annotated_list().filter(
+            form_topic__working_form__slug=self.kwargs["working_form_slug"],
+            is_removed=False,
         )
-        if self.action in ["retrieve", "list", "update", "partial_update"]:
-            queryset = queryset.annotate(
-                delete_votes=Count("deleted_by", distinct=True),
-                total_approvers=Count(
-                    "form_topic__working_form__approvers", distinct=True
-                ),
-            )
-        return queryset
 
     def get_serializer_class(self):
         return WorkingFormItemSerializer
@@ -425,7 +526,7 @@ class WorkingFormTopicViewSet(viewsets.ReadOnlyModelViewSet):
         return [JSONRenderer]
 
     def get_permissions(self):
-        if self.action == "add_question":
+        if self.action in ["add_question", "restore_item"]:
             return [permissions.IsAuthenticated(), CanInteractWithWorkingForm()]
         return [permissions.IsAuthenticated()]
 
@@ -446,7 +547,7 @@ class WorkingFormTopicViewSet(viewsets.ReadOnlyModelViewSet):
             .filter(
                 working_form__slug=self.kwargs["working_form_slug"], is_removed=False
             )
-            .select_related("working_form", "topic")
+            .select_related("topic")
         )
 
         if self.action == "list":
@@ -469,7 +570,12 @@ class WorkingFormTopicViewSet(viewsets.ReadOnlyModelViewSet):
                 )
             )
 
-        return queryset
+        if self.action == "add_question":
+            return queryset.select_related("working_form", "topic").prefetch_related(
+                "working_form__approvers", "working_form__approved_by"
+            )
+
+        return queryset.select_related("working_form", "topic")
 
     @action(detail=True, methods=["post"], url_path="add-question")
     def add_question(self, request, working_form_slug=None, pk=None):
@@ -487,11 +593,21 @@ class WorkingFormTopicViewSet(viewsets.ReadOnlyModelViewSet):
         except ValidationError as e:
             return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
 
+        try:
+            item_for_response = WorkingFormItem.objects.get_annotated_list().get(
+                pk=new_item.pk
+            )
+        except WorkingFormItem.DoesNotExist:
+            return Response(
+                {"error": "Failed to reload created item."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
         channel_layer = get_channel_layer()
         form_group_name = f"form_{form_topic.working_form.id}"
 
         item_data = WorkingFormItemSerializer(
-            new_item, context={"request": request}
+            item_for_response, context={"request": request}
         ).data
 
         async_to_sync(channel_layer.group_send)(
@@ -512,7 +628,9 @@ class WorkingFormTopicViewSet(viewsets.ReadOnlyModelViewSet):
         """
         form_topic = self.get_object()
 
-        deleted_items = form_topic.items.filter(is_removed=True)
+        deleted_items = WorkingFormItem.objects.get_annotated_list().filter(
+            form_topic=form_topic, is_removed=True
+        )
 
         serializer = WorkingFormItemSerializer(
             deleted_items, many=True, context={"request": request}

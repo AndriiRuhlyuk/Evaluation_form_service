@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Evaluation Report: Test Test</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333; line-height: 1.6; max-width: 900px; margin: 0 auto; padding: 20px; }
+
+        .header { border-bottom: 2px solid #0056b3; padding-bottom: 20px; margin-bottom: 30px; }
+        .header h1 { margin: 0; color: #0056b3; }
+        .meta-info { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; color: #666; }
+
+        .section-title { background: #f0f4f8; padding: 10px 15px; border-left: 5px solid #0056b3; margin-top: 40px; }
+
+        .topic-block { margin-bottom: 30px; }
+        .question-item { border-bottom: 1px solid #eee; padding: 15px 0; page-break-inside: avoid; }
+        .question-text { font-weight: 600; font-size: 1.1em; margin-bottom: 10px; }
+
+        .scores-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+        .score-card {
+            background: white; border: 1px solid #ddd; border-radius: 6px;
+            padding: 10px; min-width: 200px; flex: 1;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+
+        .interviewer-name { font-size: 0.85em; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+        .score-val { font-weight: bold; margin: 5px 0; }
+
+        /* Colors for scores */
+        .score-3 { color: #28a745; } /* Strong */
+        .score-2 { color: #ffc107; text-shadow: 0 0 1px #999; } /* Medium */
+        .score-1 { color: #dc3545; } /* Weak */
+        .score-0 { color: #6c757d; } /* No Answer */
+        .lacks-expertise { color: #6c757d; font-style: italic; }
+
+        .comment { font-size: 0.9em; color: #555; border-top: 1px dashed #eee; margin-top: 5px; padding-top: 5px; }
+
+        .feedback-section { background: #fffbe6; padding: 20px; border: 1px solid #ffe58f; border-radius: 8px; margin-bottom: 20px; }
+        .decision { font-weight: bold; text-transform: uppercase; float: right; }
+        .decision.next_step { color: #28a745; }
+        .decision.refuse { color: #dc3545; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1>Evaluation Report</h1>
+        <div class="meta-info">
+            <div><strong>Candidate:</strong> Test Test</div>
+            <div><strong>Date:</strong> 27 Nov 2025, 11:14</div>
+            <div><strong>Position:</strong> Python Engineer (senior)</div>
+            <div><strong>Generated:</strong> 2025-11-27 11:29</div>
+        </div>
+    </div>
+
+    <h2>Final Decisions</h2>
+    
+        <div class="feedback-block feedback-section">
+            <span class="decision next_step">
+                Move to next step
+            </span>
+            <h3>Interviewer 1</h3>
+
+            <p><strong>Pros:</strong><br> Good<br>good<br>good</p>
+            <p><strong>Cons:</strong><br> bad</p>
+            
+                <p><em>Assessed Level: Senior</em></p>
+            
+        </div>
+    
+        <div class="feedback-block feedback-section">
+            <span class="decision next_step">
+                Move to next step
+            </span>
+            <h3>Interviewer 2</h3>
+
+            <p><strong>Pros:</strong><br> Good<br>good<br>good</p>
+            <p><strong>Cons:</strong><br> Bad<br>bad</p>
+            
+                <p><em>Assessed Level: Senior</em></p>
+            
+        </div>
+    
+
+    <h2>Technical Assessment</h2>
+
+    
+        <div class="topic-block">
+            <h3 class="section-title">CS</h3>
+
+            
+                <div class="question-item">
+                    <div class="question-text">sma cs 1</div>
+
+                    <div class="scores-grid">
+                        
+                            <div class="score-card">
+                                <div class="interviewer-name">Interviewer 1</div>
+
+                                
+                                    <div class="score-val score-2">
+                                        Medium Answer
+                                    </div>
+                                
+
+                                
+                            </div>
+                        
+                            <div class="score-card">
+                                <div class="interviewer-name">Interviewer 2</div>
+
+                                
+                                    <div class="score-val score-3">
+                                        Strong Answer
+                                    </div>
+                                
+
+                                
+                            </div>
+                        
+                    </div>
+                </div>
+            
+                <div class="question-item">
+                    <div class="question-text">sma cs 2</div>
+
+                    <div class="scores-grid">
+                        
+                            <div class="score-card">
+                                <div class="interviewer-name">Interviewer 1</div>
+
+                                
+                                    <div class="score-val score-3">
+                                        Strong Answer
+                                    </div>
+                                
+
+                                
+                            </div>
+                        
+                            <div class="score-card">
+                                <div class="interviewer-name">Interviewer 2</div>
+
+                                
+                                    <div class="score-val score-3">
+                                        Strong Answer
+                                    </div>
+                                
+
+                                
+                            </div>
+                        
+                    </div>
+                </div>
+            
+                <div class="question-item">
+                    <div class="question-text">sma cs 3</div>
+
+                    <div class="scores-grid">
+                        
+                            <div class="score-card">
+                                <div class="interviewer-name">Interviewer 1</div>
+
+                                
+                                    <div class="score-val score-2">
+                                        Medium Answer
+                                    </div>
+                                
+
+                                
+                            </div>
+                        
+                            <div class="score-card">
+                                <div class="interviewer-name">Interviewer 2</div>
+
+                                
+                                    <div class="score-val lacks-expertise">Lack of Expertise</div>
+                                
+
+                                
+                            </div>
+                        
+                    </div>
+                </div>
+            
+        </div>
+    
+        <div class="topic-block">
+            <h3 class="section-title">DB</h3>
+
+            
+                <div class="question-item">
+                    <div class="question-text">sma db 1</div>
+
+                    <div class="scores-grid">
+                        
+                            <div class="score-card">
+                                <div class="interviewer-name">Interviewer 1</div>
+
+                                
+                                    <div class="score-val lacks-expertise">Lack of Expertise</div>
+                                
+
+                                
+                            </div>
+                        
+                            <div class="score-card">
+                                <div class="interviewer-name">Interviewer 2</div>
+
+                                
+                                    <div class="score-val score-3">
+                                        Strong Answer
+                                    </div>
+                                
+
+                                
+                            </div>
+                        
+                    </div>
+                </div>
+            
+                <div class="question-item">
+                    <div class="question-text">sma db 2</div>
+
+                    <div class="scores-grid">
+                        
+                            <div class="score-card">
+                                <div class="interviewer-name">Interviewer 1</div>
+
+                                
+                                    <div class="score-val score-3">
+                                        Strong Answer
+                                    </div>
+                                
+
+                                
+                            </div>
+                        
+                            <div class="score-card">
+                                <div class="interviewer-name">Interviewer 2</div>
+
+                                
+                                    <div class="score-val score-3">
+                                        Strong Answer
+                                    </div>
+                                
+
+                                
+                            </div>
+                        
+                    </div>
+                </div>
+            
+        </div>
+    
+
+</body>
+</html>

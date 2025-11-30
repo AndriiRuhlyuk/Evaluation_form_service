@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.utils.html import strip_tags
-from django.db import models, transaction
+from django.db import transaction
 from django.urls import reverse
 from django.utils.html import format_html
 from unfold.admin import ModelAdmin, TabularInline, StackedInline
@@ -8,12 +8,11 @@ from unfold.admin import ModelAdmin, TabularInline, StackedInline
 from question.models import Question
 from .models import (
     TemplateForm,
-    FormTopic,
+    TemplateFormTopic,
     TemplateFormItems,
     ReadOnlyTemplateForm,
     ReadOnlyFormTopic,
 )
-from .services import process_topics_and_questions
 
 
 # --- INLINES ---
@@ -40,16 +39,29 @@ class TemplateFormItemsInline(TabularInline):
     readonly_fields = ("topic_snapshot", "source_snapshot", "max_score_snapshot")
     autocomplete_fields = ("origin_question",)
 
+    def get_formset(self, request, obj=None, **kwargs):
+        """
+        Optimisation: Load 'origin_question',
+        :exception avoid  N+1 request in 'save_formset'.
+        """
+        formset = super().get_formset(request, obj, **kwargs)
+        formset.form.base_fields["origin_question"].queryset = formset.form.base_fields[
+            "origin_question"
+        ].queryset.select_related("topic")
+        return formset
+
     def get_queryset(self, request):
         queryset = super().get_queryset(request)
 
-        return queryset.filter(is_removed=False)
+        return queryset.filter(is_removed=False).select_related(
+            "origin_question", "form_topic__topic"
+        )
 
 
 class FormTopicInline(StackedInline):
     """Inline for topics, that represented on TemplateFormAdmin page."""
 
-    model = FormTopic
+    model = TemplateFormTopic
     extra = 0
     fields = ("topic", "manage_questions_link")
     readonly_fields = ("manage_questions_link",)
@@ -59,7 +71,7 @@ class FormTopicInline(StackedInline):
     def manage_questions_link(self, obj):
         if not obj.pk:
             return "Save before add questions"
-        url = reverse("admin:template_form_formtopic_change", args=[obj.pk])
+        url = reverse("admin:template_form_templateformtopic_change", args=[obj.pk])
         return format_html(
             f'<a href="{url}" class="button button-secondary button-sm">Manage questions</a>'
         )
@@ -68,15 +80,22 @@ class FormTopicInline(StackedInline):
 # --- MAIN ADMIN CLASSES ---
 
 
-@admin.register(FormTopic)
-class FormTopicAdmin(ModelAdmin):
+@admin.register(TemplateFormTopic)
+class TemplateFormTopicAdmin(ModelAdmin):
     """
-    Page for manage FormTopic instance and questions.
+    Page for manage TemplateFormTopic instance and questions.
     Logic to save TemplateFormItems.
     """
 
     inlines = [TemplateFormItemsInline]
     readonly_fields = ("form", "topic")
+
+    def get_queryset(self, request):
+        """
+        Optimisation: Load 'form' and 'topic',
+        to avoid N+1 request in 'save_formset'.
+        """
+        return super().get_queryset(request).select_related("form", "topic")
 
     def has_module_permission(self, request):
         return False
@@ -258,7 +277,7 @@ class ReadOnlyFormTopicInline(StackedInline):
     Used for represented topics in ReadOnlyTemplateFormAdmin
     """
 
-    model = FormTopic
+    model = TemplateFormTopic
     extra = 0
     fields = ("topic", "view_questions_link")
     readonly_fields = ("topic", "view_questions_link")

@@ -20,9 +20,6 @@ class BaseForm(models.Model):
     tech_stack = models.ForeignKey(
         TechStack, on_delete=models.PROTECT, related_name="%(class)s_forms"
     )
-    topics = models.ManyToManyField(
-        Topic, through="FormTopic", related_name="%(class)s_forms", blank=True
-    )
     slug = models.SlugField(max_length=500, blank=True, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -41,6 +38,10 @@ class BaseForm(models.Model):
 
 class TemplateForm(BaseForm):
     """Model for Template Form"""
+
+    topics = models.ManyToManyField(
+        Topic, through="TemplateFormTopic", related_name="template_forms", blank=True
+    )
 
     def __str__(self):
         return self.name
@@ -93,7 +94,7 @@ class BaseFormItems(models.Model):
         )
 
 
-class FormTopic(models.Model):
+class TemplateFormTopic(models.Model):
     """Through-model for M2M"""
 
     form = models.ForeignKey(
@@ -114,7 +115,7 @@ class TemplateFormItems(BaseFormItems):
     """Model for Template Form Item"""
 
     form_topic = models.ForeignKey(
-        FormTopic,
+        TemplateFormTopic,
         on_delete=models.CASCADE,
         related_name="items",
     )
@@ -163,7 +164,7 @@ class ReadOnlyTemplateForm(TemplateForm):
         verbose_name_plural = "Template Forms (Read-Only)"
 
 
-class ReadOnlyFormTopic(FormTopic):
+class ReadOnlyFormTopic(TemplateFormTopic):
     class Meta:
         proxy = True
         verbose_name = "Form Topic (Read-Only)"

@@ -3,5 +3,5 @@ from . import consumers
 
 
 websocket_urlpatterns = [
-    path("ws/working_form/<int:form_id>", consumers.WorkingFormConsumer.as_asgi()),
+    path("ws/working_form/<int:form_id>/", consumers.WorkingFormConsumer.as_asgi()),
 ]

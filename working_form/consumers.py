@@ -61,6 +61,11 @@ class WorkingFormConsumer(AsyncWebsocketConsumer):
         self.form_id = self.scope["url_route"]["kwargs"]["form_id"]
         self.form_group_name = f"form_{self.form_id}"
 
+        user = self.scope.get("user")
+        print(
+            f"WebSocket CONNECT: user={user}, user.id={getattr(user, 'id', None)}, form_id={self.form_id}"
+        )
+
         await self.channel_layer.group_add(self.form_group_name, self.channel_name)
         await self.accept()
 
@@ -82,6 +87,11 @@ class WorkingFormConsumer(AsyncWebsocketConsumer):
         data = json.loads(text_data)
         action = data.get("action")
         user = self.scope["user"]
+
+        # ✅ ЛОГУВАННЯ: Яка дія і від кого
+        print(
+            f"WebSocket RECEIVE: action={action}, user={user}, user.id={getattr(user, 'id', None)}, user.pk={getattr(user, 'pk', None)}"
+        )
 
         if action in ["toggle_item_delete_vote", "toggle_topic_delete_vote"]:
 
@@ -120,7 +130,13 @@ class WorkingFormConsumer(AsyncWebsocketConsumer):
                     await self.send_error("Missing 'item_id'.")
                     return
 
+                # ✅ ЛОГУВАННЯ перед викликом
+                print(f"Calling toggle_item_vote: item_id={item_id}, user.pk={user.pk}")
+
                 updated_item = await self._call_toggle_item_vote(item_id, user.pk)
+
+                # ✅ ЛОГУВАННЯ результату
+                print(f"toggle_item_vote result: {updated_item['data_for_client']}")
 
                 await self.channel_layer.group_send(
                     self.form_group_name,

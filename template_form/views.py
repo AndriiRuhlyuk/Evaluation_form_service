@@ -3,10 +3,12 @@ from django.db.models import Count, Q, Prefetch, prefetch_related_objects
 
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, OpenApiParameter
-from rest_framework import viewsets, filters, status
+from rest_framework import viewsets, filters, status, serializers, permissions
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from template_form.models import TemplateForm, TemplateFormItems, FormTopic
+from template_form.models import TemplateForm, TemplateFormItems, TemplateFormTopic
+from template_form.permissions import IsManagerOrSuperuser
 from template_form.serializers import (
     TemplateFormListSerializer,
     TemplateFormDetailSerializer,
@@ -16,7 +18,8 @@ from template_form.serializers import (
     TemplateFormItemUpdateSerializer,
 )
 from template_form.services import _synchronize_form_topics, clone_template_to_working
-from working_form.models import WorkingForm, WorkingFormTopic, WorkingFormItem
+from working_form.models import WorkingForm
+from working_form.permissions import IsRecruiter
 from working_form.serializers import (
     WorkingFormCreateSerializer,
     WorkingFormDetailSerializer,
@@ -48,7 +51,7 @@ class TemplateFormViewSet(viewsets.ModelViewSet):
         .prefetch_related(
             Prefetch(
                 "form_topics",
-                queryset=FormTopic.objects.order_by("topic__name")
+                queryset=TemplateFormTopic.objects.order_by("topic__name")
                 .select_related("topic")
                 .prefetch_related("items__origin_question"),
             ),
@@ -74,6 +77,12 @@ class TemplateFormViewSet(viewsets.ModelViewSet):
 
     lookup_field = "slug"
 
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [IsAuthenticated()]
+
+        return [permissions.IsAuthenticated(), IsManagerOrSuperuser()]
+
     def get_serializer_class(self):
         if self.action == "create_working_form":
             return WorkingFormCreateSerializer
@@ -89,33 +98,39 @@ class TemplateFormViewSet(viewsets.ModelViewSet):
         """
         return {"request": self.request}
 
-    @action(detail=True, methods=["post"])
+    @action(
+        detail=True, methods=["post"], permission_classes=[IsAuthenticated, IsRecruiter]
+    )
     def create_working_form(self, request, slug=None):
         """
         Creates a WorkingForm instance based on this template.
         """
         template_form = self.get_object()
 
-        input_serializer = self.get_serializer(data=request.data)
+        context = self.get_serializer_context()
+        context["request"] = request
+
+        input_serializer = self.get_serializer(data=request.data, context=context)
         input_serializer.is_valid(raise_exception=True)
 
         try:
             working_form = clone_template_to_working(
                 template_form=template_form,
-                recruiter=request.user,
-                form_data=input_serializer.validated_data,
+                validated_data=input_serializer.validated_data,
             )
         except Exception as e:
+            if isinstance(e, serializers.ValidationError):
+                return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
             return Response(
-                {"error": f"Failed to clone template: {e}"},
+                {"error": f"Failed to clone template: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
         try:
             working_form_pk = working_form.pk
             retrieve_queryset = WorkingForm.objects.select_related(
-                "tech_stack"
-            ).prefetch_related("interviewers", "approvers", "approved_by")
+                "tech_stack", "hiring_manager"
+            ).prefetch_related("interviewers", "approvers", "approved_by", "recruiters")
             optimized_working_form = retrieve_queryset.get(pk=working_form_pk)
             working_viewset_instance = WorkingFormViewSet()
 
@@ -209,6 +224,12 @@ class TemplateFormItemViewSet(viewsets.ModelViewSet):
     ]
 
     serializer_class = TemplateFormItemsListSerializer
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [IsAuthenticated()]
+
+        return [permissions.IsAuthenticated(), IsManagerOrSuperuser()]
 
     def get_queryset(self):
         """

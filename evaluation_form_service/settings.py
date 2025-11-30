@@ -29,7 +29,10 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv("DJANGO_DEBUG", "False") == "True"
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    "127.0.0.1",
+    "localhost",
+]
 
 
 # Application definition
@@ -53,6 +56,7 @@ INSTALLED_APPS = [
     "debug_toolbar",
     "django_filters",
     "drf_spectacular",
+    "django_celery_beat",
     "nested_admin",
     "techstack",
     "topic",
@@ -61,6 +65,7 @@ INSTALLED_APPS = [
     "question",
     "template_form",
     "working_form",
+    "evaluation_form",
 ]
 
 MIDDLEWARE = [
@@ -172,14 +177,28 @@ REST_FRAMEWORK = {
     ),
 }
 
+# --- CELERY SETTINGS ---
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL")
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND")
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60
+CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+
+# --- JWT SETTINGS ---
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=180),
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=360),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
     "UPDATE_LAST_LOGIN": True,
 }
 
+
+# --- SPECTACULAR SETTINGS ---
 SPECTACULAR_SETTINGS = {
     "TITLE": "Evaluation Form Service API",
     "DESCRIPTION": "Create Templates, Working forms, Evaluation forms. Evaluate candidates",
@@ -205,3 +224,12 @@ CHANNEL_LAYERS = {
 DEBUG_TOOLBAR_CONFIG = {
     "SHOW_TOOLBAR_CALLBACK": lambda request: DEBUG,
 }
+
+
+PEOPLEFORCE_API_KEY = os.getenv("PEOPLEFORCE_API_KEY")
+PEOPLEFORCE_API_URL = os.getenv("PEOPLEFORCE_API_URL")
+
+
+MEDIA_URL = "/media/"
+
+MEDIA_ROOT = os.path.join(BASE_DIR, "media")
