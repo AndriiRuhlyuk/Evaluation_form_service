@@ -29,12 +29,22 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv("DJANGO_DEBUG", "False") == "True"
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    "127.0.0.1",
+    "localhost",
+]
 
 
 # Application definition
 
 INSTALLED_APPS = [
+    "daphne",
+    "channels",
+    "unfold",
+    "unfold.contrib.filters",
+    "unfold.contrib.forms",
+    "unfold.contrib.import_export",
+    "unfold.contrib.inlines",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -46,16 +56,22 @@ INSTALLED_APPS = [
     "debug_toolbar",
     "django_filters",
     "drf_spectacular",
+    "django_celery_beat",
+    "nested_admin",
     "techstack",
     "topic",
     "employee",
     "rest_framework_simplejwt",
     "question",
+    "template_form",
+    "working_form",
+    "evaluation_form",
     "project",
 ]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "debug_toolbar.middleware.DebugToolbarMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -84,7 +100,9 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = "evaluation_form_service.wsgi.application"
+ASGI_APPLICATION = "evaluation_form_service.asgi.application"
+
+# WSGI_APPLICATION = "evaluation_form_service.wsgi.application"
 
 
 # Database
@@ -138,6 +156,9 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
@@ -157,14 +178,28 @@ REST_FRAMEWORK = {
     ),
 }
 
+# --- CELERY SETTINGS ---
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL")
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND")
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60
+CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+
+# --- JWT SETTINGS ---
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=180),
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=360),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
     "UPDATE_LAST_LOGIN": True,
 }
 
+
+# --- SPECTACULAR SETTINGS ---
 SPECTACULAR_SETTINGS = {
     "TITLE": "Evaluation Form Service API",
     "DESCRIPTION": "Create Templates, Working forms, Evaluation forms. Evaluate candidates",
@@ -178,4 +213,24 @@ SPECTACULAR_SETTINGS = {
     },
 }
 
-INTERNAL_IPS = ["127.0.0.1", "172.18.0.1", "192.168.65.1"]
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [("redis", 6379)],
+        },
+    },
+}
+
+DEBUG_TOOLBAR_CONFIG = {
+    "SHOW_TOOLBAR_CALLBACK": lambda request: DEBUG,
+}
+
+
+PEOPLEFORCE_API_KEY = os.getenv("PEOPLEFORCE_API_KEY")
+PEOPLEFORCE_API_URL = os.getenv("PEOPLEFORCE_API_URL")
+
+
+MEDIA_URL = "/media/"
+
+MEDIA_ROOT = os.path.join(BASE_DIR, "media")

@@ -21,14 +21,14 @@ class QuestionListSerializer(serializers.ModelSerializer):
     """Serializer for list of questions."""
 
     detail = serializers.SerializerMethodField()
-    topic_name = serializers.CharField(source="topic.name")
+    topic = serializers.StringRelatedField()
 
     class Meta:
         model = Question
         fields = (
             "id",
             "question_text",
-            "topic_name",
+            "topic",
             "difficulty",
             "source",
             "usage_count",

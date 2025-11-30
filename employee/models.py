@@ -18,7 +18,7 @@ class CustomUserManager(UserManager):
         return user
 
     def create_user(self, email=None, password=None, **extra_fields):
-        extra_fields.setdefault("is_staff", False)
+        extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", False)
         return self._create_user(email, password, **extra_fields)
 
@@ -35,6 +35,7 @@ class Employee(AbstractUser):
     updated_at = models.DateTimeField(auto_now=True)
 
     ROLE_CHOICES = [
+        ("HIRING_MANAGER", "Hiring Manager"),
         ("MANAGER", "Manager"),
         ("RECRUITER", "Recruiter"),
         ("INTERVIEWER", "Interviewer"),
@@ -46,6 +47,7 @@ class Employee(AbstractUser):
         ("JUNIOR", "Junior"),
         ("MIDDLE", "Middle"),
         ("SENIOR", "Senior"),
+        ("LEAD", "Lead"),
     ]
 
     level = models.CharField(max_length=30, choices=LEVEL_CHOICES)

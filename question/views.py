@@ -1,11 +1,13 @@
 from drf_spectacular.utils import extend_schema, OpenApiParameter
-from rest_framework import filters, viewsets, status
+from rest_framework import filters, viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from question.permissions import IsEmployee
+
+from template_form.permissions import IsManagerOrSuperuser
+from .permissions import IsEmployee
 
 from question.models import Question
 from question.serializers import (
@@ -40,8 +42,8 @@ class QuestionViewSet(viewsets.ModelViewSet):
     - `GET /api/questions/{id}/` - Get Question details (full view)
     - `PUT /api/questions/{id}/` - Update Question completely
     - `PATCH /api/questions/{id}/` - Update Question partially
-    - `DELETE /api/questions/{id}/` - Soft delete topic
-    - `POST /api/questions/{id}/restore/` - Restore unactive question
+    - `DELETE /api/questions/{id}/` - Soft delete Question
+    - `POST /api/questions/{id}/restore/` - Restore unactive Question
     """
 
     queryset = Question.objects.select_related("topic", "question_author").order_by(
@@ -56,6 +58,7 @@ class QuestionViewSet(viewsets.ModelViewSet):
         filters.OrderingFilter,
     )
     filterset_fields = {
+        "topic": ["exact"],
         "topic__name": ["icontains"],
         "difficulty": ["exact"],
         "source": ["exact"],
@@ -74,6 +77,12 @@ class QuestionViewSet(viewsets.ModelViewSet):
             return QuestionRestoreSerializer
         return QuestionSerializer
 
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [IsAuthenticated()]
+
+        return [permissions.IsAuthenticated(), IsManagerOrSuperuser()]
+
     def perform_create(self, serializer):
         """
         Temporary Automatically identifies the
@@ -86,7 +95,7 @@ class QuestionViewSet(viewsets.ModelViewSet):
         For LIST - filter by is_active (by default only active)
         For DETAIL (retrieve, update, destroy) - always all objects
         """
-        queryset = Question.objects.all()
+        queryset = super().get_queryset()
 
         if self.action == "list":
             is_active_param = self.request.query_params.get("is_active")

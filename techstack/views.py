@@ -1,5 +1,5 @@
 from rest_framework.decorators import action
-from rest_framework import viewsets, filters, status
+from rest_framework import viewsets, filters, status, permissions
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -13,6 +13,7 @@ from techstack.serializers import (
     TechStackListSerializer,
     TechStackRestoreSerializer,
 )
+from template_form.permissions import IsManagerOrSuperuser
 
 
 class TechStackViewSet(viewsets.ModelViewSet):
@@ -49,12 +50,10 @@ class TechStackViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsEmployee]
 
     def get_permissions(self):
-        if hasattr(self, "action") and self.action:
-            if self.action in ["destroy", "restore"]:
-                return [IsEmployee()]
-            elif self.action in ["create", "update", "partial_update"]:
-                return [AllowAny()]
-        return []
+        if self.action in ["list", "retrieve"]:
+            return [IsAuthenticated()]
+
+        return [permissions.IsAuthenticated(), IsManagerOrSuperuser()]
 
     def get_serializer_class(self):
         if self.action == "list":

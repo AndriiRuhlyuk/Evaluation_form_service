@@ -15,7 +15,9 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 
+from django.conf.urls.static import static
 from django.contrib import admin
+import nested_admin
 from django.urls import path, include
 from django.conf import settings
 from drf_spectacular.views import (
@@ -24,6 +26,8 @@ from drf_spectacular.views import (
     SpectacularRedocView,
 )
 
+from template_form.services import get_question_details
+
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/projects/", include("project.urls", namespace="project")),
@@ -31,6 +35,14 @@ urlpatterns = [
     path("api/topics/", include("topic.urls", namespace="topic")),
     path("api/employees/", include(("employee.urls", "employee"), "employee")),
     path("api/questions/", include("question.urls", namespace="question")),
+    path(
+        "api/template-form/", include("template_form.urls", namespace="template-form")
+    ),
+    path("api/working-form/", include("working_form.urls", namespace="working-form")),
+    path(
+        "api/evaluation-form/",
+        include("evaluation_form.urls", namespace="evaluation-form"),
+    ),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path(
         "api/doc/swagger/",
@@ -42,9 +54,16 @@ urlpatterns = [
         SpectacularRedocView.as_view(url_name="schema"),
         name="redoc",
     ),
+    path("_nested_admin/", include("nested_admin.urls")),
+    path(
+        "api/question-details/<int:pk>/",
+        get_question_details,
+        name="get_question_details",
+    ),
 ]
 
 if settings.DEBUG and "debug_toolbar" in settings.INSTALLED_APPS:
     import debug_toolbar
 
     urlpatterns += [path("__debug__/", include(debug_toolbar.urls))]
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
