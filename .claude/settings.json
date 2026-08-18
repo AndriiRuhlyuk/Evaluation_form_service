@@ -43,6 +43,11 @@
   "sandbox": {
     "enabled": true,
     "autoAllowBashIfSandboxed": false,
+    "filesystem": {
+      "allowRead": [
+        ".env.sample"
+      ]
+    },
     "network": {
       "allowedDomains": [
         "pypi.org",
