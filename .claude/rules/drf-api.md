@@ -71,6 +71,8 @@ JWT-only auth, `PageNumberPagination` with page size 5, throttling anon 100/day 
 300/day. Admin uses django-unfold plus nested_admin, so `/_nested_admin/` must stay routed or
 nested inlines break. OpenAPI lives at `/api/schema/`, `/api/doc/swagger/`, `/api/doc/redoc/`.
 
-Known break: `employee/serializers.py:30` lists `project` and `tech_stack` in `fields`, but
-`Employee` has neither. Schema generation and any `EmployeeSerializer` request raise
-`ImproperlyConfigured` until that is fixed.
+`ModelSerializer.Meta.fields` is validated lazily, at first use rather than at import, so a
+name that no longer exists on the model passes `manage.py check` and only blows up as
+`ImproperlyConfigured` when the endpoint or the schema is hit. `EmployeeSerializer` carried
+`project` and `tech_stack` this way after both fields were dropped from `Employee`. When you
+remove a model field, grep every `fields = (...)` tuple for its name.

@@ -40,7 +40,7 @@ python manage.py loaddata fixtures/initial_data.json
 (see `.env.sample`).
 
 **Baselines to diff against.** `flake8` reports exactly 2 findings, both `F841` in
-`employee/serializers.py:85,90`; anything else is yours. Only two real tests exist
+`employee/serializers.py:83,88`; anything else is yours. Only two real tests exist
 (`topic/tests/tests_topics.py`, `techstack/tests/tests_techstacks.py`) - every other
 `tests.py` is an empty stub, so a green test run proves almost nothing.
 

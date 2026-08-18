@@ -27,8 +27,6 @@ class EmployeeSerializer(serializers.ModelSerializer):
             "fullname",
             "role",
             "level",
-            "project",
-            "tech_stack",
             "is_active",
             "updated_at",
         )
