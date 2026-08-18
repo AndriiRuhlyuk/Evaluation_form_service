@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 from datetime import timedelta
 from pathlib import Path
 import os
+import sys
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -80,6 +81,15 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
+
+# Django під тестами примусово вимикає DEBUG, але debug_toolbar лишається в
+# INSTALLED_APPS, а його URL реєструються в urls.py тільки при DEBUG=True. Через це
+# перший же рендер шаблону падає на NoReverseMatch: 'djdt'. Прибираємо toolbar цілком
+# на час manage.py test - інакше жоден тест у проєкті не запускається.
+TESTING = "test" in sys.argv
+if TESTING:
+    INSTALLED_APPS.remove("debug_toolbar")
+    MIDDLEWARE.remove("debug_toolbar.middleware.DebugToolbarMiddleware")
 
 AUTH_USER_MODEL = "employee.Employee"
 

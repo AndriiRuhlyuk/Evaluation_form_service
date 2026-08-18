@@ -36,12 +36,17 @@ soft-deleted rows. Filter `is_active=True` by hand outside the viewset, and neve
 has nothing to do with this convention. `Employee` is `AUTH_USER_MODEL` with
 `CustomUserManager` (`employee/models.py:5`) - email login, no username.
 
-## `all_objects` exists in exactly one app
+## `all_objects` lives on every form, but not on template items/topics
 
-Only `working_form` defines it (`WorkingForm`, `WorkingFormTopic`, `WorkingFormItem`).
-`WorkingForm.all_objects` is also what slug uniqueness checks read
-(`working_form/models.py:247,280`), so a soft-deleted form still reserves its slug. On any
-`template_form` model `all_objects` raises `AttributeError`.
+All three form models (`TemplateForm`, `WorkingForm`, `EvaluationForm`) inherit both
+managers from `BaseForm` (`template_form/models.py`): `objects = SoftDeleteManager()`
+filters `is_deleted=False`, `all_objects` is unfiltered. Slug uniqueness always reads
+`all_objects` (`BaseForm.save`, `WorkingForm.generate_name_and_slug`, the slug loop in
+`clone_working_to_evaluation`), so a soft-deleted form still reserves its slug.
+`WorkingFormTopic` and `WorkingFormItem` keep their own `all_objects` for `is_removed`.
+On `TemplateFormItems`/`TemplateFormTopic` `all_objects` still raises `AttributeError`.
+FK access (`form.template_origin`) uses Django's plain base manager and DOES see deleted
+rows - `base_manager_name` is deliberately unset so history stays reachable.
 
 ## Managers here are query-heavy by design
 

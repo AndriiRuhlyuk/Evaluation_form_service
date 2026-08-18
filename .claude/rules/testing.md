@@ -9,14 +9,17 @@ paths:
 
 ## The real baseline
 
-Only two test files contain assertions:
+Test files with assertions:
 
 - `topic/tests/tests_topics.py`
 - `techstack/tests/tests_techstacks.py`
+- `template_form/tests.py`, `working_form/tests.py`, `evaluation_form/tests.py` - soft
+  delete of the three form stages only (destroy endpoints, slug reservation, admin restore,
+  the celery status task, destroy permissions)
 
-Every other `tests.py` is the untouched Django stub. A full `python manage.py test` therefore
-goes green while the three `clone_*` functions, every permission class and the WebSocket
-consumer are completely uncovered. Never cite a green run as evidence that a change is safe -
+Everything else is the untouched Django stub. A full `python manage.py test` therefore goes
+green while the three `clone_*` functions, most permission classes and the WebSocket
+consumer are still uncovered. Never cite a green run as evidence that a change is safe -
 say which test you added and what it exercises.
 
 ## Cover in this order

@@ -53,12 +53,21 @@ requires `approvers_count == approved_by_count`. Zero approvers → not approved
 | `is_active` | `Topic`, `TechStack`, `Question`, `Project` | plain default manager; each viewset exposes a `restore` action |
 | `is_removed` | `WorkingFormTopic`, `WorkingFormItem` | `objects` filters removed out, `all_objects` does not |
 | `is_removed` | `TemplateFormItems`, `TemplateFormTopic` | **no custom managers at all** |
-| `is_deleted` | `WorkingForm` | `objects` filtered, `all_objects` unfiltered and also used for slug-uniqueness checks |
+| `is_deleted` | `TemplateForm`, `WorkingForm`, `EvaluationForm` (inherited from `BaseForm`) | `objects` (SoftDeleteManager) filtered, `all_objects` unfiltered and also used for slug-uniqueness checks |
 
 The trap is the middle two rows. In `working_form` you pick a manager deliberately
-(`working_form/models.py:461,608`). In `template_form` there is nothing to pick:
-`Model.all_objects` raises `AttributeError`, and `Model.objects` silently returns removed
-rows, so filter `is_removed=False` by hand.
+(`working_form/models.py`, topic/item managers). In `template_form` items/topics there is
+nothing to pick: `Model.all_objects` raises `AttributeError`, and `Model.objects` silently
+returns removed rows, so filter `is_removed=False` by hand.
+
+**Form-level soft delete (all three stages).** DELETE endpoints call
+`instance.soft_delete(request.user)` via `perform_destroy`; it stamps
+`deleted_at`/`deleted_by` and saves with `update_fields` (a full save would regenerate
+name/slug on `WorkingForm`/`EvaluationForm`). Deleting an IN_PROGRESS evaluation raises a
+DRF ValidationError (400). `report_file` is never touched - the PeopleForce note links to
+it. Restore is admin-only: each form admin lists deleted rows via `all_objects` and offers
+a bulk-`update()` restore action (bypasses `save()` on purpose); the standard admin delete
+remains the hard-delete escape hatch. No API restore endpoint exists.
 
 `employee.Employee.is_active` is Django's standard auth flag (login enabled/disabled) and has
 nothing to do with this convention.
