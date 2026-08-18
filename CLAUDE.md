@@ -48,6 +48,7 @@ evaluation_form_service/
 │   └── services.py            # clone_template_to_working(), get_question_details()
 ├── working_form/              # STAGE 2: per-vacancy copy, collaborative voting + approval
 │   ├── consumers.py           # WebSocket consumer, group `form_<id>`
+│   ├── custom_fields.py       # M2MListField - M2M as a flat list of ids, used by serializers.py
 │   ├── middleware.py          # JwtAuthMiddleware - JWT auth for the WS handshake
 │   ├── routing.py             # websocket_urlpatterns, wired into asgi.py
 │   ├── services.py            # clone_working_to_evaluation(), clone_working_from_working()
@@ -58,15 +59,30 @@ evaluation_form_service/
 ├── templates/reports/         # evaluation_report.html - rendered by generate_html_report()
 ├── fixtures/                  # initial_data.json
 ├── docs/orchestration/        # per-feature plans (Ukrainian)
-└── .claude/rules/             # path-scoped rules, auto-loaded by glob
+└── .claude/
+    ├── rules/                 # path-scoped rules, auto-loaded by glob
+    └── hooks/                 # guard-migrations, check-new-migrations, check-layout-drift
 ```
+
+This tree is checked automatically - see `check-layout-drift.sh` under Commands. Only
+directories and "capability" filenames are tracked (`services.py`, `consumers.py`,
+`middleware.py`, `routing.py`, `tasks.py`, `utils.py`, `custom_fields.py`, `admin_mixins.py`,
+`signals.py`, `managers.py`); `models.py`/`views.py`/`serializers.py` and friends exist in
+every app and carry no signal. Indentation is a contract: exactly 4 characters per level.
 
 ## Commands
 
-Tooling lives in `.venv/`. Activate it or prefix with `.venv/bin/`. Two hooks in
-`.claude/settings.json` act on you: `PostToolUse` runs `.venv/bin/black` on every `.py` you
-write, and `PreToolUse` (`guard-migrations.sh`) turns any migration-touching command, or any
-`git clean`, into a permission prompt.
+Tooling lives in `.venv/`. Activate it or prefix with `.venv/bin/`. Hooks in
+`.claude/settings.json` act on you:
+
+- `PostToolUse` runs `.venv/bin/black` on every `.py` you write.
+- `PreToolUse` (`guard-migrations.sh`) turns any migration-touching command, or any
+  `git clean`, into a permission prompt.
+- `check-new-migrations.sh` reports destructive operations in a freshly created migration.
+- `check-layout-drift.sh` (`SessionStart` + `PostToolUse`) compares the tree in
+  **Project Layout** below against the real structure. When it speaks, edit that section -
+  add or drop the line **and write the comment**; a path with no annotation is worse than
+  no line at all. It is silent when they match.
 
 ```bash
 docker-compose up --build      # Postgres, Redis, Daphne :8000, Celery worker/beat, Flower :5555

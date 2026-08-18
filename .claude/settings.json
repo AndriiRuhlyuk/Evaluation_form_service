@@ -90,6 +90,27 @@
             "statusMessage": "black"
           }
         ]
+      },
+      {
+        "matcher": "Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/check-layout-drift.sh PostToolUse",
+            "statusMessage": "звірка структури проєкту"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/check-layout-drift.sh SessionStart",
+            "statusMessage": "звірка структури проєкту"
+          }
+        ]
       }
     ]
   },
