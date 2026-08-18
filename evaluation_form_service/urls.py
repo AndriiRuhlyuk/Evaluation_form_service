@@ -17,7 +17,6 @@ Including another URLconf
 
 from django.conf.urls.static import static
 from django.contrib import admin
-import nested_admin
 from django.urls import path, include
 from django.conf import settings
 from drf_spectacular.views import (

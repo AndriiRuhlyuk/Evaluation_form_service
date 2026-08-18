@@ -1,24 +1,33 @@
 from rest_framework.decorators import action
 from rest_framework import viewsets, filters, status, permissions
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from techstack.models import TechStack
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 
-from techstack.permissions import IsEmployee
+from techstack.permissions import (
+    IsEmployee,
+)  # Custom permission to check if user is an employee
 from techstack.serializers import (
-    TechStackSerializer,
-    TechStackListSerializer,
-    TechStackRestoreSerializer,
+    TechStackSerializer,  # Detailed serializer for single tech stack
+    TechStackListSerializer,  # Simplified serializer for list views
+    TechStackRestoreSerializer,  # Serializer for restoration responses
 )
-from template_form.permissions import IsManagerOrSuperuser
+from template_form.permissions import (
+    IsManagerOrSuperuser,
+)  # Permission for manager/admin operations
 
 
 class TechStackViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing technology stacks used in candidate evaluation forms.
+
+    This ViewSet provides a complete set of CRUD operations for managing technology stacks
+    that are used to categorize and organize evaluation forms. It implements soft deletion
+    instead of hard deletion to preserve data integrity, and provides specialized endpoints
+    for restoring soft-deleted tech stacks.
 
     **Features:**
     - Full CRUD operations
@@ -34,52 +43,101 @@ class TechStackViewSet(viewsets.ModelViewSet):
     - `PUT /api/techstacks/{id}/` - Update tech stack completely
     - `PATCH /api/techstacks/{id}/` - Update tech stack partially
     - `DELETE /api/techstacks/{id}/` - Soft delete tech stack
-    - `POST /api/techstacks/{id}/restore/` - Restore unactive techstack
+    - `POST /api/techstacks/{id}/restore/` - Restore inactive techstack
     """
 
-    queryset = TechStack.objects.all()
-    serializer_class = TechStackSerializer
+    queryset = TechStack.objects.all()  # Base queryset of all tech stacks
+    serializer_class = (
+        TechStackSerializer  # Default serializer for detail, create, update operations
+    )
     filter_backends = [
-        DjangoFilterBackend,
-        filters.SearchFilter,
-        filters.OrderingFilter,
+        DjangoFilterBackend,  # Enables filtering by query parameters
+        filters.SearchFilter,  # Enables searching by specified fields
+        filters.OrderingFilter,  # Enables ordering by specified fields
     ]
-    filterset_fields = ["is_active"]
-    search_fields = ["name"]
-    ordering_fields = ["name", "id"]
-    permission_classes = [IsAuthenticated, IsEmployee]
+    filterset_fields = ["is_active"]  # Fields that can be filtered via query params
+    search_fields = ["name"]  # Fields that can be searched
+    ordering_fields = ["name", "id"]  # Fields that can be used for ordering
+    permission_classes = [IsAuthenticated, IsEmployee]  # Default permissions
 
     def get_permissions(self):
-        if self.action in ["list", "retrieve"]:
-            return [IsAuthenticated()]
+        """
+        Determine the permissions for different actions.
 
-        return [permissions.IsAuthenticated(), IsManagerOrSuperuser()]
+        For read-only actions (list, retrieve), only authentication is required.
+        For all other actions (create, update, delete, restore), the user must be
+        both authenticated and have manager or superuser privileges.
+
+        Returns:
+            list: List of permission classes to apply
+        """
+        if self.action in ["list", "retrieve"]:
+            return [
+                IsAuthenticated()
+            ]  # Read-only operations require only authentication
+
+        return [
+            permissions.IsAuthenticated(),
+            IsManagerOrSuperuser(),
+        ]  # Write operations require manager/admin privileges
 
     def get_serializer_class(self):
+        """
+        Select the appropriate serializer based on the current action.
+
+        - For list views: Use TechStackListSerializer for a concise representation
+        - For restore action: Use TechStackRestoreSerializer for restoration responses
+        - For all other actions: Use TechStackSerializer for full representation
+
+        Returns:
+            class: The serializer class to use
+        """
         if self.action == "list":
-            return TechStackListSerializer
+            return TechStackListSerializer  # Simplified serializer for list views
         if self.action == "restore":
-            return TechStackRestoreSerializer
-        return TechStackSerializer
+            return TechStackRestoreSerializer  # Specialized serializer for restoration responses
+        return TechStackSerializer  # Detailed serializer for all other operations
 
     def get_queryset(self):
         """
-        For LIST - filter by is_active (by default only active)
-        For DETAIL (retrieve, update, destroy) - always all objects
+        Filter the queryset based on the current action.
+
+        For LIST action:
+        - By default, only return active tech stacks (is_active=True)
+        - If 'is_active' query parameter is explicitly provided, use that value instead
+
+        For all other actions (retrieve, update, destroy):
+        - Return all tech stacks regardless of active status
+
+        Returns:
+            QuerySet: Filtered queryset of TechStack objects
         """
-        queryset = TechStack.objects.all()
+        queryset = TechStack.objects.all()  # Start with all tech stacks
 
         if self.action == "list":
-            is_active_param = self.request.query_params.get("is_active")
+            is_active_param = self.request.query_params.get(
+                "is_active"
+            )  # Get is_active filter from query params
             if is_active_param is None:
-                queryset = queryset.filter(is_active=True)
+                queryset = queryset.filter(
+                    is_active=True
+                )  # Default to showing only active tech stacks
 
         return queryset
 
     def perform_destroy(self, instance):
-        """Soft delete: mark as inactive instead of actual deletion"""
-        instance.is_active = False
-        instance.save()
+        """
+        Implement soft deletion instead of hard deletion.
+
+        Instead of removing the record from the database, this method marks
+        the tech stack as inactive (is_active=False). This preserves the data
+        for historical purposes while hiding it from normal use.
+
+        Args:
+            instance (TechStack): The tech stack to soft-delete
+        """
+        instance.is_active = False  # Mark as inactive instead of deleting
+        instance.save()  # Save the updated instance
 
     @extend_schema(
         summary="Restore inactive techstack",
@@ -94,27 +152,41 @@ class TechStackViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def restore(self, request, pk=None):
         """
-        POST /api/techstacks/{id}/restore/ - restore unactive techstack
-        Only for admins
+        Restore a soft-deleted tech stack by setting is_active=True.
+
+        This endpoint allows administrators to restore a previously soft-deleted
+        tech stack, making it available for use again in the system. It checks
+        if the tech stack is already active to prevent unnecessary operations.
+
+        Args:
+            request (Request): The HTTP request
+            pk (int): The primary key of the tech stack to restore
+
+        Returns:
+            Response: A response containing a success message and the restored tech stack data,
+                     or an error message if the tech stack is already active
         """
-        instance = self.get_object()
+        instance = self.get_object()  # Get the tech stack instance
 
         if instance.is_active:
+            # If already active, return an error
             return Response(
-                {"error": "Techstack is already active"},
-                status=status.HTTP_400_BAD_REQUEST,
+                {"error": "Techstack is already active"},  # Error message
+                status=status.HTTP_400_BAD_REQUEST,  # 400 status code
             )
 
+        # Restore the tech stack by setting is_active to True
         instance.is_active = True
         instance.save()
 
+        # Serialize the restored tech stack for the response
         serializer = self.get_serializer(instance)
         return Response(
             {
-                "message": f"Techstack '{instance.name}' restored successfully",
-                "topic": serializer.data,
+                "message": f"Techstack '{instance.name}' restored successfully",  # Success message
+                "topic": serializer.data,  # Serialized tech stack data
             },
-            status=status.HTTP_200_OK,
+            status=status.HTTP_200_OK,  # 200 status code
         )
 
     @extend_schema(
@@ -140,4 +212,21 @@ class TechStackViewSet(viewsets.ModelViewSet):
         tags=["Tech Stacks"],
     )
     def list(self, request, *args, **kwargs):
-        return super().list(request, *args, **kwargs)
+        """
+        List tech stacks with optional filtering, searching, and ordering.
+
+        This method extends the default list behavior with OpenAPI documentation
+        for the available query parameters. By default, it returns only active
+        tech stacks unless the is_active parameter is explicitly provided.
+
+        Args:
+            request (Request): The HTTP request with optional query parameters
+            *args: Variable length argument list
+            **kwargs: Arbitrary keyword arguments
+
+        Returns:
+            Response: A paginated list of tech stacks matching the filters
+        """
+        return super().list(
+            request, *args, **kwargs
+        )  # Use the parent class implementation

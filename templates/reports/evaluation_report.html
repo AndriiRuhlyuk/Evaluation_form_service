@@ -59,7 +59,7 @@
             <span class="decision {{ fb.decision }}">
                 {{ fb.get_decision_display }}
             </span>
-            <h3>{{ fb.interviewer.get_full_name|default:fb.interviewer.email }}</h3>
+            <h3>{{ fb.interviewer.fullname|default:fb.interviewer.email }}</h3>
 
             <p><strong>Pros:</strong><br> {{ fb.pros|linebreaksbr }}</p>
             <p><strong>Cons:</strong><br> {{ fb.cons|linebreaksbr }}</p>
@@ -82,7 +82,7 @@
                     <div class="scores-grid">
                         {% for score in item.scores.all %}
                             <div class="score-card">
-                                <div class="interviewer-name">{{ score.interviewer.get_full_name }}</div>
+                                <div class="interviewer-name">{{ score.interviewer.fullname }}</div>
 
                                 {% if score.lacks_expertise %}
                                     <div class="score-val lacks-expertise">Lack of Expertise</div>

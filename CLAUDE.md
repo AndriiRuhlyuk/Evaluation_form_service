@@ -131,6 +131,7 @@ directory is scanned recursively, so the folders below are organisation for huma
 | Rule | Loads for | Covers |
 |---|---|---|
 | `general.md` | `**/*.py` | layering, order of work, query discipline, comment language, verification |
+| `workflow.md` | `**/*.py`, `docs/plans/**` | TDD via `superpowers:test-driven-development`, always offer `superpowers:subagent-driven-development` for plans |
 | `api/views.md` | `**/views.py`, `**/urls.py` | slug lookup, real URL shapes, viewset defaults, who owns the broadcast |
 | `api/serializers.md` | `**/serializers.py` | lazily validated `Meta.fields`, `M2MListField`, no writes here |
 | `api/permissions.md` | `**/permissions.py` | the twelve classes, the missing global default, JWT and roles |
