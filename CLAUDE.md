@@ -9,23 +9,17 @@ matching files.
 
 Django REST Framework service for technical-interview evaluation forms. A recruiter builds a
 question blueprint, a hiring team fills it collaboratively in real time for one vacancy, and
-each candidate gets a frozen snapshot of it that carries scores, feedback, a generated HTML
-report, and a note pushed back to the PeopleForce CRM.
-
-Single Django project, no frontend in this repo - the API is consumed over REST plus one
-WebSocket channel.
+each candidate gets a frozen snapshot carrying scores, feedback, an HTML report, and a note
+pushed to the PeopleForce CRM. No frontend here - REST plus one WebSocket channel.
 
 ## Tech Stack
 
-- **Runtime:** Python 3.13, Django 5.2.6, Django REST Framework 3.16.1
-- **Database:** PostgreSQL 16 via psycopg 3 (`psycopg[binary]`)
+- **Core:** Python 3.13, Django 5.2.6, DRF 3.16.1, PostgreSQL 16 via psycopg 3
 - **Realtime:** Channels 4.3.1 + Daphne 4.2.1 (ASGI), `channels_redis` over Redis
-- **Async jobs:** Celery 5.5.3 + `django-celery-beat` (DB scheduler), Flower for monitoring
-- **Auth:** `djangorestframework-simplejwt` - email login, no username
-- **API surface:** drf-spectacular (OpenAPI), django-filter, drf-nested-routers
-- **Admin:** django-unfold + django-nested-admin + django-debug-toolbar
-- **Tooling:** black, flake8, whitenoise
-- **Infrastructure:** Docker Compose (web, db, redis, celery, celery-beat, flower)
+- **Async jobs:** Celery 5.5.3 + `django-celery-beat` (DB scheduler), Flower
+- **API surface:** simplejwt (email login), drf-spectacular, django-filter, drf-nested-routers
+- **Admin and tooling:** django-unfold, nested_admin, debug-toolbar, black, flake8, whitenoise
+- **Infrastructure:** Docker Compose - web, db, redis, celery, celery-beat, flower
 
 ## Project Layout
 
@@ -59,50 +53,32 @@ evaluation_form_service/
 ├── templates/reports/         # evaluation_report.html - rendered by generate_html_report()
 ├── fixtures/                  # initial_data.json
 ├── docs/orchestration/        # per-feature plans (Ukrainian)
-└── .claude/
-    ├── rules/                 # path-scoped rules, auto-loaded by glob
-    └── hooks/                 # guard-migrations, check-new-migrations, check-layout-drift
+└── .claude/                   # rules/ (path-scoped, auto-loaded by glob) + hooks/
 ```
 
-This tree is checked automatically - see `check-layout-drift.sh` under Commands. Only
-directories and "capability" filenames are tracked (`services.py`, `consumers.py`,
-`middleware.py`, `routing.py`, `tasks.py`, `utils.py`, `custom_fields.py`, `admin_mixins.py`,
-`signals.py`, `managers.py`); `models.py`/`views.py`/`serializers.py` and friends exist in
-every app and carry no signal. Indentation is a contract: exactly 4 characters per level.
+`check-layout-drift.sh` verifies this tree against the real structure. Indentation is a
+contract - exactly 4 characters per level; the tracked-filename whitelist is documented in
+the script itself.
 
 ## Commands
 
-Tooling lives in `.venv/`. Activate it or prefix with `.venv/bin/`. Hooks in
-`.claude/settings.json` act on you:
-
-- `PostToolUse` runs `.venv/bin/black` on every `.py` you write.
-- `PreToolUse` (`guard-migrations.sh`) turns any migration-touching command, or any
-  `git clean`, into a permission prompt.
-- `check-new-migrations.sh` reports destructive operations in a freshly created migration.
-- `check-layout-drift.sh` (`SessionStart` + `PostToolUse`) compares the tree in
-  **Project Layout** below against the real structure. When it speaks, edit that section -
-  add or drop the line **and write the comment**; a path with no annotation is worse than
-  no line at all. It is silent when they match.
+Tooling lives in `.venv/`. Activate it or prefix with `.venv/bin/`. Four hooks in
+`.claude/settings.json` act on you: `black` on every `.py` written; a permission prompt on any
+migration-touching command or `git clean`; a destructive-operation report on a new migration;
+and `check-layout-drift.sh` - when it speaks, fix **Project Layout** and **write the comment**,
+an unannotated path being worse than no line at all.
 
 ```bash
 docker-compose up --build      # Postgres, Redis, Daphne :8000, Celery worker/beat, Flower :5555
-
 python manage.py wait_for_db   # custom command, lives in the techstack app
 python manage.py migrate
-python manage.py createsuperuser   # email + password, no username
 python manage.py runserver         # ASGI-served (daphne is first in INSTALLED_APPS)
 daphne evaluation_form_service.asgi:application   # explicit ASGI, needed to exercise WebSockets
-
 python manage.py showmigrations    # ALWAYS run before makemigrations
 python manage.py makemigrations <app>
-
-python manage.py test              # all
 python manage.py test working_form # one app, or a dotted path down to one method
-
 black .   # format first: black rewrites, flake8 only reports
 flake8    # config in setup.cfg
-
-python manage.py loaddata fixtures/initial_data.json
 ```
 
 **Baselines to diff against.** `flake8` must exit clean - zero findings. Any output at all is
@@ -122,17 +98,11 @@ question + topic + techstack   question bank
   → EvaluationForm  per-candidate snapshot, scores + feedback + report
 ```
 
-Clone functions, the highest bug density in the repo (`grep -rn "def clone_"` - line numbers
-rot faster than anything else in this file):
-- `clone_template_to_working()` in `template_form/services.py`
-- `clone_working_to_evaluation()`, `clone_working_from_working()` in `working_form/services.py`
-
-Supporting apps: `employee` (custom user model + JWT endpoints), `project` (vacancy reference
-data).
-
-Layering: `views.py` stays thin → `services.py` owns mutations and multi-model workflows →
-`permissions.py` owns access rules. One deliberate exception: `get_question_details` is a
-plain function view inside `template_form/services.py`, wired to `/api/question-details/<pk>/`.
+The three `clone_*` functions carry the highest bug density in the repo - the tree above names
+the two files holding them. Layering: `views.py` stays thin → `services.py` owns mutations and
+multi-model workflows → `permissions.py` owns access rules. One deliberate exception:
+`get_question_details` is a plain function view inside `template_form/services.py`, wired to
+`/api/question-details/<pk>/`.
 
 ## Hard Rules
 
@@ -158,52 +128,22 @@ plain function view inside `template_form/services.py`, wired to `/api/question-
 5. **Add a test.** No safety net exists; prioritise `services.py`, `permissions.py`, the consumer.
 6. **Verify.** `black . && flake8 && python manage.py test`, compared against the Commands baselines.
 
-## Environment Variables
+## Environment
 
-All of them are read with a bare `os.getenv()` in `settings.py` - **no defaults except
-`DJANGO_DEBUG`**. A missing key does not fall back, it surfaces later as `None` deep inside
-Django (unreadable `SECRET_KEY` error, or a psycopg connection to database `None`).
+`.env` must define `SECRET_KEY`, `DJANGO_DEBUG`, `POSTGRES_DB/USER/PASSWORD/HOST/PORT`,
+`CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, `PEOPLEFORCE_API_KEY`, `PEOPLEFORCE_API_URL`,
+`PGDATA`. None has a default except `DJANGO_DEBUG`, and `Read(**/.env.*)` is denied so
+`.env.sample` is unreadable - `local-setup.md` explains what each one breaks when missing.
 
-| Variable | Purpose |
-|---|---|
-| `SECRET_KEY` | Django signing key |
-| `DJANGO_DEBUG` | compared against the string `"True"`; anything else means production mode |
-| `POSTGRES_DB` / `USER` / `PASSWORD` / `HOST` / `PORT` | psycopg 3 connection; `HOST` is `db` in compose, `localhost` outside |
-| `CELERY_BROKER_URL` | Redis URL the worker publishes to |
-| `CELERY_RESULT_BACKEND` | where task results land |
-| `PEOPLEFORCE_API_KEY` | CRM auth, used by `PeopleForceService` |
-| `PEOPLEFORCE_API_URL` | CRM base URL |
-| `PGDATA` | read by `docker-compose.yaml` only (`my_db:$PGDATA`), never by Django - omit it and the db volume mounts wrong |
+## Docs and Conventions
 
-`Read(**/.env.*)` is denied, so `.env.sample` is unreadable to you too - this table is the
-only copy you get.
+Everything is versioned with the code; there is no external vault. `README.md` holds setup and
+the Git Workflow (branch naming, commit prefixes - not restated here). `Progress.md` is the
+roadmap, `Features_list.json` the feature registry with `done` flags, `docs/orchestration/`
+the per-feature plans; plan mode creates `docs/plans/` on demand.
 
-## Local-run Gotchas
-
-- `CHANNEL_LAYERS` hardcodes Redis to `("redis", 6379)`, the compose service name. Outside Docker,
-  override it or alias `redis` in `/etc/hosts`, or every WebSocket connection fails.
-- `MEDIA_URL` reaches `urlpatterns` only when `DEBUG` **and** `debug_toolbar` are active, so
-  generated reports are not served in a `DEBUG=False` local run.
-- `ALLOWED_HOSTS` is hardcoded to `127.0.0.1`/`localhost`, and `AllowedHostsOriginValidator` wraps
-  the WebSocket router, so a non-local Origin is rejected before auth runs.
-
-## Documentation
-
-Everything lives in the repo and is versioned with the code - there is no external vault.
-
-| Artifact | Holds |
-|---|---|
-| `README.md` | setup instructions and the Git Workflow (branch naming, commit prefixes) |
-| `Progress.md` | roadmap, Ukrainian |
-| `Features_list.json` | feature registry with `done` flags |
-| `docs/orchestration/` | per-feature implementation plans, Ukrainian |
-| `docs/plans/` | created on demand by plan mode (`plansDirectory` in `.claude/settings.json`) |
-
-## Conventions
-
-- Code and identifiers in English. Docstrings and comments mix English and Ukrainian - match
-  the file you are editing. Planning docs are Ukrainian.
-- Git flow and commit prefixes: see `README.md` → "Git Workflow". Not restated here.
+Code and identifiers in English. Docstrings and comments mix English and Ukrainian - match the
+file you are editing. Planning docs are Ukrainian.
 
 ## Path-specific Rules
 
@@ -215,18 +155,16 @@ Detail loads automatically from `.claude/rules/` when you open matching files:
 | `drf-api.md` | `**/views.py`, `**/serializers.py`, `**/permissions.py` | real URL shapes, slug lookup, permission classes, query discipline |
 | `realtime.md` | consumer, middleware, routing, `asgi.py` | ASGI wiring, WebSocket auth, the broadcast contract |
 | `reporting-crm.md` | `evaluation_form/services.py`, `tasks.py`, `templates/reports/**` | completion flow, report generation, PeopleForce sync |
+| `local-setup.md` | `settings.py`, `celery.py`, `asgi.py`, `docker-compose.yaml`, `Dockerfile` | every env var and what it breaks, running outside Docker, compose topology |
 
 Path-scoped rules are **not** re-injected after `/compact`; they reload the next time you open a
 matching file. Anything that must survive compaction belongs in this file, not in a rule.
+`/memory` lists what is actually loaded right now - run it when a rule seems to be ignored.
 
 ## Compact Instructions
 
-When compacting, always preserve:
-
-- Which pipeline stage the current task touches, and why that one.
-- Any uncommitted migration you created or noticed - `guard-migrations.sh` prompts are easy to
-  lose, and a forgotten migration silently stacks on the next one.
-- File paths modified in this session, with the service function names touched.
-- The last `flake8` result and whether it was clean, since a clean baseline is the only
-  regression signal this repo has.
-- Whether a working-form mutation still needs its `group_send` broadcast.
+When compacting, always preserve: which pipeline stage the task touches; any uncommitted
+migration you created or noticed (a forgotten one silently stacks on the next); file paths
+modified this session with the service function names; the last `flake8` result, since a clean
+baseline is the only regression signal here; and whether a working-form mutation still owes
+its `group_send` broadcast.
