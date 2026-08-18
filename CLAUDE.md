@@ -62,11 +62,12 @@ the script itself.
 
 ## Commands
 
-Tooling lives in `.venv/`. Activate it or prefix with `.venv/bin/`. Four hooks in
+Tooling lives in `.venv/`. Activate it or prefix with `.venv/bin/`. Five hooks in
 `.claude/settings.json` act on you: `black` on every `.py` written; a permission prompt on any
 migration-touching command or `git clean`; a destructive-operation report on a new migration;
-and `check-layout-drift.sh` - when it speaks, fix **Project Layout** and **write the comment**,
-an unannotated path being worse than no line at all.
+an `InstructionsLoaded` logger (see Path-specific Rules); and `check-layout-drift.sh` - when it
+speaks, fix **Project Layout** and **write the comment**, an unannotated path being worse than
+no line at all.
 
 ```bash
 docker-compose up --build      # Postgres, Redis, Daphne :8000, Celery worker/beat, Flower :5555
@@ -158,8 +159,9 @@ Detail loads automatically from `.claude/rules/` when you open matching files:
 | `local-setup.md` | `settings.py`, `celery.py`, `asgi.py`, `docker-compose.yaml`, `Dockerfile` | every env var and what it breaks, running outside Docker, compose topology |
 
 Path-scoped rules are **not** re-injected after `/compact`; they reload the next time you open a
-matching file. Anything that must survive compaction belongs in this file, not in a rule.
-`/memory` lists what is actually loaded right now - run it when a rule seems to be ignored.
+matching file. Anything that must survive compaction belongs in this file, not in a rule. When a
+rule seems ignored: `/memory` shows what is loaded now, and `.claude/instructions.log`
+(gitignored, one JSON line per load) shows which file triggered it and why.
 
 ## Compact Instructions
 

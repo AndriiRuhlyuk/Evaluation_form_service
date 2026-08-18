@@ -38,7 +38,8 @@
     "BASH_DEFAULT_TIMEOUT_MS": "300000",
     "BASH_MAX_TIMEOUT_MS": "600000",
     "PYTHONUNBUFFERED": "1",
-    "PYTHONDONTWRITEBYTECODE": "1"
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "CLAUDE_CODE_NEW_INIT": "1"
   },
   "sandbox": {
     "enabled": true,
@@ -109,6 +110,17 @@
             "type": "command",
             "command": "bash .claude/hooks/check-layout-drift.sh SessionStart",
             "statusMessage": "звірка структури проєкту"
+          }
+        ]
+      }
+    ],
+    "InstructionsLoaded": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -c '{ts: (now|todate), sid: .session_id[0:8], file: .file_path, type: .memory_type, reason: .load_reason, trigger: .trigger_file_path, globs: .globs}' >> .claude/instructions.log 2>/dev/null || true",
+            "statusMessage": "лог інструкцій"
           }
         ]
       }
