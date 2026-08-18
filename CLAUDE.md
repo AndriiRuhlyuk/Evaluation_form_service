@@ -39,9 +39,9 @@ python manage.py loaddata fixtures/initial_data.json
 `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, `PEOPLEFORCE_API_KEY`, `PEOPLEFORCE_API_URL`
 (see `.env.sample`).
 
-**Baselines to diff against.** `flake8` reports exactly 2 findings, both `F841` in
-`employee/serializers.py:83,88`; anything else is yours. Only two real tests exist
-(`topic/tests/tests_topics.py`, `techstack/tests/tests_techstacks.py`) - every other
+**Baselines to diff against.** `flake8` must exit clean - zero findings. Any output at all is
+a regression introduced by your diff. Tests are the opposite: only two real ones exist
+(`topic/tests/tests_topics.py`, `techstack/tests/tests_techstacks.py`) and every other
 `tests.py` is an empty stub, so a green test run proves almost nothing.
 
 ## 2. Architecture
