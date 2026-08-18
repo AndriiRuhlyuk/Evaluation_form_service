@@ -1,8 +1,10 @@
 ---
+description: ASGI wiring, WebSocket JWT handshake, and the broadcast contract every working-form action owes.
 paths:
   - "working_form/consumers.py"
   - "working_form/middleware.py"
   - "working_form/routing.py"
+  - "working_form/views.py"
   - "evaluation_form_service/asgi.py"
 ---
 

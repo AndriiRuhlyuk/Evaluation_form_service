@@ -1,4 +1,5 @@
 ---
+description: Every env var and what it breaks when missing, running outside Docker, compose topology.
 paths:
   - "evaluation_form_service/settings.py"
   - "evaluation_form_service/celery.py"

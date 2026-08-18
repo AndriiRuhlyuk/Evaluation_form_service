@@ -1,4 +1,5 @@
 ---
+description: Snapshots, the three clone functions, the two opposite quorum rules, soft delete, draft/publish.
 paths:
   - "template_form/**"
   - "working_form/**"

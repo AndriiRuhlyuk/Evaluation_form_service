@@ -1,4 +1,5 @@
 ---
+description: Completion flow, HTML report generation, the Celery status task and the PeopleForce push.
 paths:
   - "evaluation_form/services.py"
   - "evaluation_form/tasks.py"

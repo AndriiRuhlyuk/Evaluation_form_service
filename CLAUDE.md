@@ -53,7 +53,7 @@ evaluation_form_service/
 ├── templates/reports/         # evaluation_report.html - rendered by generate_html_report()
 ├── fixtures/                  # initial_data.json
 ├── docs/orchestration/        # per-feature plans (Ukrainian)
-└── .claude/                   # rules/ (path-scoped, auto-loaded by glob) + hooks/
+└── .claude/                   # rules/ grouped by layer (api, data, domain, infra, integrations) + hooks/
 ```
 
 `check-layout-drift.sh` verifies this tree against the real structure. Indentation is a
@@ -82,10 +82,9 @@ black .   # format first: black rewrites, flake8 only reports
 flake8    # config in setup.cfg
 ```
 
-**Baselines to diff against.** `flake8` must exit clean - zero findings. Any output at all is
-a regression introduced by your diff. Tests are the opposite: only two real ones exist
-(`topic/tests/tests_topics.py`, `techstack/tests/tests_techstacks.py`) and every other
-`tests.py` is an empty stub, so a green test run proves almost nothing.
+**Baseline to diff against.** `flake8` must exit clean - zero findings. Any output at all is a
+regression introduced by your diff. The test suite is the opposite of a signal; `testing.md`
+explains why a green run proves almost nothing here.
 
 ## Architecture
 
@@ -100,34 +99,13 @@ question + topic + techstack   question bank
 ```
 
 The three `clone_*` functions carry the highest bug density in the repo - the tree above names
-the two files holding them. Layering: `views.py` stays thin → `services.py` owns mutations and
-multi-model workflows → `permissions.py` owns access rules. One deliberate exception:
-`get_question_details` is a plain function view inside `template_form/services.py`, wired to
-`/api/question-details/<pk>/`.
+the two files holding them. `template_form/models.py` additionally holds the abstract bases
+(`BaseForm`, `BaseFormItems`) that all three stages inherit, so it is shared foundation rather
+than stage one.
 
-## Hard Rules
-
-**NEVER:**
-- Put a mutation or a multi-model workflow in a view or serializer. It belongs in `services.py`.
-- Call `.count()` on anything reachable from a list endpoint. Use `working_form/utils.py: prefetch_count()`.
-- Use `all_objects` on a `template_form` model. It does not exist there and raises `AttributeError`.
-- Add a stage or a snapshot field before reading all three clone functions.
-
-**ALWAYS:**
-- Run `showmigrations` before `makemigrations`. Feature branches here carry uncommitted migrations,
-  so a new one can silently stack on someone else's unmerged state.
-- Name the manager explicitly when the model has soft delete. Three different flags exist and
-  one of them behaves differently per app.
-
-## Workflow
-
-1. **Locate the stage.** Template, working, or evaluation? Touching two means two tasks.
-2. **Write the service function.** Logic and transaction boundary in `<app>/services.py`.
-3. **Wire the view.** Thin `@action` or viewset method, permission class from `<app>/permissions.py`.
-4. **Broadcast if it mutates a working form.** `async_to_sync(channel_layer.group_send)` to
-   `form_<id>`. Skip it and connected clients silently drift - never leave a mutation unbroadcast.
-5. **Add a test.** No safety net exists; prioritise `services.py`, `permissions.py`, the consumer.
-6. **Verify.** `black . && flake8 && python manage.py test`, compared against the Commands baselines.
+**First question on any task: which stage?** Touching two stages means two tasks. Everything
+below that - layering, transactions, query discipline, verification order - lives in
+`general.md` and loads the moment you open a `.py` file.
 
 ## Environment
 
@@ -141,27 +119,38 @@ multi-model workflows → `permissions.py` owns access rules. One deliberate exc
 Everything is versioned with the code; there is no external vault. `README.md` holds setup and
 the Git Workflow (branch naming, commit prefixes - not restated here). `Progress.md` is the
 roadmap, `Features_list.json` the feature registry with `done` flags, `docs/orchestration/`
-the per-feature plans; plan mode creates `docs/plans/` on demand.
-
-Code and identifiers in English. Docstrings and comments mix English and Ukrainian - match the
-file you are editing. Planning docs are Ukrainian.
+the per-feature plans; plan mode creates `docs/plans/` on demand. Planning docs are Ukrainian;
+the code-comment convention lives in `general.md`.
 
 ## Path-specific Rules
 
-Detail loads automatically from `.claude/rules/` when you open matching files:
+Every rule in `.claude/rules/` is path-scoped - **nothing there loads unconditionally**. The
+directory is scanned recursively, so the folders below are organisation for humans; only
+`paths:` decides what enters context.
 
 | Rule | Loads for | Covers |
 |---|---|---|
-| `forms-lifecycle.md` | `template_form/**`, `working_form/**`, `evaluation_form/**` | snapshots, cloning, draft/publish, the two quorum rules, soft delete |
-| `drf-api.md` | `**/views.py`, `**/serializers.py`, `**/permissions.py` | real URL shapes, slug lookup, permission classes, query discipline |
-| `realtime.md` | consumer, middleware, routing, `asgi.py` | ASGI wiring, WebSocket auth, the broadcast contract |
-| `reporting-crm.md` | `evaluation_form/services.py`, `tasks.py`, `templates/reports/**` | completion flow, report generation, PeopleForce sync |
-| `local-setup.md` | `settings.py`, `celery.py`, `asgi.py`, `docker-compose.yaml`, `Dockerfile` | every env var and what it breaks, running outside Docker, compose topology |
+| `general.md` | `**/*.py` | layering, order of work, query discipline, comment language, verification |
+| `api/views.md` | `**/views.py`, `**/urls.py` | slug lookup, real URL shapes, viewset defaults, who owns the broadcast |
+| `api/serializers.md` | `**/serializers.py` | lazily validated `Meta.fields`, `M2MListField`, no writes here |
+| `api/permissions.md` | `**/permissions.py` | the twelve classes, the missing global default, JWT and roles |
+| `api/admin.md` | `**/admin.py`, `admin_mixins.py` | unfold ordering, the unevenly applied mixin, `nested_admin` is unused |
+| `data/models.md` | `**/models.py` | shared abstract bases, manager selection, `is_active` filtered in views |
+| `data/migrations.md` | `**/migrations/*.py` | `showmigrations` first, the uncommitted five, what the hooks do |
+| `domain/forms-lifecycle.md` | `template_form/**`, `working_form/**`, `evaluation_form/**` | snapshots, cloning, draft/publish, the two quorum rules, soft delete |
+| `domain/services.md` | `**/services.py` | transaction boundaries, services never broadcast, private helpers |
+| `domain/realtime.md` | consumer, middleware, routing, `working_form/views.py`, `asgi.py` | ASGI wiring, WebSocket auth, the broadcast contract |
+| `integrations/reporting-crm.md` | `evaluation_form/services.py`, `tasks.py`, `templates/reports/**` | completion flow, report generation, PeopleForce sync |
+| `infra/local-setup.md` | `settings.py`, `celery.py`, `asgi.py`, `docker-compose.yaml`, `Dockerfile` | every env var and what it breaks, compose topology |
+| `testing.md` | `**/tests.py`, `**/tests/*.py` | why green proves nothing, what to cover first |
 
 Path-scoped rules are **not** re-injected after `/compact`; they reload the next time you open a
-matching file. Anything that must survive compaction belongs in this file, not in a rule. When a
-rule seems ignored: `/memory` shows what is loaded now, and `.claude/instructions.log`
-(gitignored, one JSON line per load) shows which file triggered it and why.
+matching file. Anything that must survive compaction belongs in this file, not in a rule.
+
+When a rule seems ignored, `/memory` will not help - it lists the CLAUDE.md family only and
+never scans `.claude/rules/`. Use `.claude/instructions.log` instead (gitignored, one JSON line
+per load): it records the rule file, the `trigger` file that matched and the `globs` that did
+it. An expected line missing there means the glob did not match, not that the rule was skipped.
 
 ## Compact Instructions
 
