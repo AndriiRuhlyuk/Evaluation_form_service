@@ -4,14 +4,15 @@ Django REST Framework service for technical-interview evaluation forms. This fil
 router: it carries what every session needs. Detail that only matters inside one subsystem
 lives in `.claude/rules/` and loads when you open matching files.
 
-**Tradeoff:** this file records pitfalls and reasons, not description. It deliberately omits
-what you can read off the code. If a line here contradicts the code, the code wins - fix the
-line.
+**Tradeoff:** this file records pitfalls and reasons, not description; it omits what you can
+read off the code. If a line here contradicts the code, the code wins - fix the line.
 
 ## 1. Commands
 
-Tooling lives in `.venv/`. Activate it or prefix with `.venv/bin/`; the `PostToolUse` hook in
-`.claude/settings.json` calls `.venv/bin/black` explicitly.
+Tooling lives in `.venv/`. Activate it or prefix with `.venv/bin/`. Two hooks in
+`.claude/settings.json` act on you: `PostToolUse` runs `.venv/bin/black` on every `.py` you
+write, and `PreToolUse` (`guard-migrations.sh`) turns any migration-touching command, or any
+`git clean`, into a permission prompt.
 
 ```bash
 docker-compose up --build      # Postgres, Redis, Daphne :8000, Celery worker/beat, Flower :5555
@@ -26,8 +27,7 @@ python manage.py showmigrations    # ALWAYS run before makemigrations
 python manage.py makemigrations <app>
 
 python manage.py test              # all
-python manage.py test working_form # one app
-python manage.py test topic.tests.tests_topics.TopicModelTest.test_create_topic
+python manage.py test working_form # one app, or a dotted path down to one method
 
 black .   # format first: black rewrites, flake8 only reports
 flake8    # config in setup.cfg
@@ -36,8 +36,8 @@ python manage.py loaddata fixtures/initial_data.json
 ```
 
 `.env` must define `SECRET_KEY`, `DJANGO_DEBUG`, `POSTGRES_DB/USER/PASSWORD/HOST/PORT`,
-`CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, `PEOPLEFORCE_API_KEY`, `PEOPLEFORCE_API_URL`
-(see `.env.sample`).
+`CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, `PEOPLEFORCE_API_KEY`, `PEOPLEFORCE_API_URL`.
+`Read(**/.env.*)` is denied, so `.env.sample` is unreadable too - this list is the only copy.
 
 **Baselines to diff against.** `flake8` must exit clean - zero findings. Any output at all is
 a regression introduced by your diff. Tests are the opposite: only two real ones exist
@@ -56,10 +56,10 @@ question + topic + techstack   question bank
   → EvaluationForm  per-candidate snapshot, scores + feedback + report
 ```
 
-Clone functions, the highest bug density in the repo:
-- `template_form/services.py:729  clone_template_to_working()`
-- `working_form/services.py:342   clone_working_to_evaluation()`
-- `working_form/services.py:484   clone_working_from_working()`
+Clone functions, the highest bug density in the repo (`grep -rn "def clone_"` - line numbers
+here rot faster than anything else in this file):
+- `clone_template_to_working()` in `template_form/services.py`
+- `clone_working_to_evaluation()`, `clone_working_from_working()` in `working_form/services.py`
 
 Supporting apps: `employee` (custom user model + JWT endpoints), `project` (vacancy reference
 data).
@@ -74,7 +74,6 @@ plain function view inside `template_form/services.py`, wired to `/api/question-
 - Put a mutation or a multi-model workflow in a view or serializer. It belongs in `services.py`.
 - Call `.count()` on anything reachable from a list endpoint. Use `working_form/utils.py: prefetch_count()`.
 - Use `all_objects` on a `template_form` model. It does not exist there and raises `AttributeError`.
-- Mutate a working form without broadcasting to its channel group; connected clients silently drift.
 - Add a stage or a snapshot field before reading all three clone functions.
 
 **ALWAYS:**
@@ -88,7 +87,8 @@ plain function view inside `template_form/services.py`, wired to `/api/question-
 1. **Locate the stage.** Template, working, or evaluation? Touching two means two tasks.
 2. **Write the service function.** Logic and transaction boundary in `<app>/services.py`.
 3. **Wire the view.** Thin `@action` or viewset method, permission class from `<app>/permissions.py`.
-4. **Broadcast if it mutates a working form.** `async_to_sync(channel_layer.group_send)` to `form_<id>`.
+4. **Broadcast if it mutates a working form.** `async_to_sync(channel_layer.group_send)` to
+   `form_<id>`. Skip it and connected clients silently drift - never leave a mutation unbroadcast.
 5. **Add a test.** No safety net exists; prioritise `services.py`, `permissions.py`, the consumer.
 6. **Verify.** `black . && flake8 && python manage.py test`, compared against the §1 baselines.
 
@@ -97,8 +97,6 @@ plain function view inside `template_form/services.py`, wired to `/api/question-
 - Code and identifiers in English. Docstrings and comments mix English and Ukrainian - match
   the file you are editing. Planning docs (`Progress.md`, `docs/orchestration/*`) are Ukrainian.
 - Git flow and commit prefixes: see `README.md` → "Git Workflow". Not restated here.
-- New viewsets keep the project DRF defaults: JWT-only auth, `PageNumberPagination` (page size 5),
-  throttling anon 100/day and user 300/day.
 - Planning artifacts: `Features_list.json` (registry with `done` flags), `Progress.md` (roadmap),
   `docs/orchestration/` (per-feature plans). `.claude/settings.json` points `plansDirectory` at
   `docs/plans`, which plan mode creates on demand.
