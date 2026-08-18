@@ -16,11 +16,15 @@
     "ask": [
       "Bash(python manage.py migrate *)",
       "Bash(docker-compose down *)",
-      "Edit(**/migrations/*.py)"
+      "Edit(**/migrations/*.py)",
+      "Edit(**/migrations/**/*.py)"
     ],
     "deny": [
       "Bash(git push *)",
       "Bash(rm -rf *)",
+      "Bash(git clean *)",
+      "Bash(git checkout -- *)",
+      "Bash(git restore *)",
       "Bash(python manage.py flush *)",
       "Bash(python manage.py sqlflush *)",
       "Bash(dropdb *)",
@@ -36,8 +40,42 @@
     "PYTHONUNBUFFERED": "1",
     "PYTHONDONTWRITEBYTECODE": "1"
   },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": false,
+    "network": {
+      "allowedDomains": [
+        "pypi.org",
+        "files.pythonhosted.org"
+      ],
+      "allowLocalBinding": true
+    }
+  },
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/guard-migrations.sh",
+            "statusMessage": "перевірка міграцій"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(python manage.py makemigrations*)",
+            "command": "bash .claude/hooks/check-new-migrations.sh",
+            "statusMessage": "аналіз нових міграцій"
+          }
+        ]
+      },
       {
         "matcher": "Write|Edit",
         "hooks": [
