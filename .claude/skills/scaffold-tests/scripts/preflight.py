@@ -208,12 +208,13 @@ def check_layout(report: Report, root: Path, app: str | None) -> None:
                 )
             )
             return
+        # The repo canon is a tests/ package in every app; a missing package
+        # is something to create, never a reason to fall back to a flat
+        # module that would then collide with the package later.
         pkg = app_dir / "tests"
-        destination = (
-            f"{app}/tests/tests_<topic>.py"
-            if pkg.is_dir()
-            else f"{app}/tests.py (append)"
-        )
+        destination = f"{app}/tests/tests_<topic>.py"
+        if not pkg.is_dir():
+            destination += " (create the package and its __init__.py first)"
         report.add(Check("destination", "ok", destination))
 
 

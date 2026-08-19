@@ -34,8 +34,8 @@ with `0`. Then stop with one question.
 app              tests   file
 --------------------------------------------
 question           23    question/tests/tests_questions.py
-working_form        8    working_form/tests.py
-project             0    (none)
+working_form        8    working_form/tests/tests_working_forms.py
+employee            0    (none)
 
 -> Which app should I cover?
 ```

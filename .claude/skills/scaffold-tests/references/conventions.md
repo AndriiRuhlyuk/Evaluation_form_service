@@ -1,7 +1,7 @@
 # Test conventions of this repo
 
 Read this before writing the first assertion. The reference files to copy the shape from are
-`working_form/tests.py` and `question/tests/tests_questions.py`. Follow them rather than habits
+`working_form/tests/tests_working_forms.py` and `question/tests/tests_questions.py`. Follow them rather than habits
 carried over from other projects - a test that looks foreign is a test nobody maintains.
 
 ## Structure
@@ -54,8 +54,10 @@ boundary (nonexistent id, repeated action, empty list).
 
 ## Where the file goes
 
-- app has a `tests/` package -> new file `<app>/tests/tests_<topic>.py`
-- app has no package -> append to the existing `<app>/tests.py`
+Every app here keeps its tests in a `tests/` package - no flat `<app>/tests.py` module is
+left in the repo. A new file goes to `<app>/tests/tests_<topic>.py`, named after the plural
+of what it covers (`tests_projects.py`, `tests_questions.py`). If the package does not exist
+yet, create it together with its `__init__.py`; do not fall back to a flat module.
 
 Never create `<app>/tests.py` next to an `<app>/tests/` directory. Python cannot decide whether
 `<app>.tests` is a module or a package, and one of them disappears without a diagnostic.
