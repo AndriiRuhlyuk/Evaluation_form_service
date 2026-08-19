@@ -95,6 +95,13 @@
       "done": true
     },
     {
+      "id": "FORM-1",
+      "category": "forms-lifecycle",
+      "name": "Form-level soft delete across all three stages",
+      "description": "is_deleted/deleted_at/deleted_by on BaseForm, SoftDeleteManager filters lists, slug stays reserved by deleted rows, IN_PROGRESS evaluations refuse deletion (400), report_file kept intact for the PeopleForce note; restore is admin-only via bulk update()",
+      "done": true
+    },
+    {
       "id": "INT-1",
       "category": "integration",
       "name": "PeopleForce CRM sync",
@@ -165,12 +172,47 @@
       "description": "A full test run emits DRF's UnorderedObjectListWarning for TemplateForm and WorkingForm: their list querysets have no deterministic ordering, so PageNumberPagination can return the same row on two pages and skip another as rows are inserted. Neither model sets Meta.ordering and neither viewset applies an explicit order_by. Project, Question, Topic and TechStack are unaffected - they all declare Meta.ordering. Surfaced while unifying the test layout (QA-6), not covered by any test yet.",
       "done": false
     },
+    {
+      "id": "BUG-5",
+      "category": "bug",
+      "name": "create_working_form declares IsRecruiter but enforces IsManagerOrSuperuser",
+      "description": "template_form/views.py:322 sets permission_classes=[IsAuthenticated, IsRecruiter] on the @action, but TemplateFormViewSet.get_permissions() overrides it for every non-read action. A recruiter gets 403 on an endpoint documented as theirs. Decide who really owns this action, then either honour the decorator in get_permissions() or fix the declaration; the test at template_form/tests/tests_template_forms.py carries a comment about it",
+      "done": false
+    },
+    {
+      "id": "TD-1",
+      "category": "tech-debt",
+      "name": "working_form/0003 silently backfills topic with default=1",
+      "description": "AlterField makes WorkingFormTopic.topic NOT NULL and fills existing NULLs with topic_id=1, with preserve_default=False so no trace remains in the model. Already applied on the local DB (verified harmless there: zero NULL rows). On any fresh environment restored from real data it will quietly attach an unrelated topic. Replace with an explicit RunPython check that refuses to migrate and lists the offending ids",
+      "done": false
+    },
+    {
+      "id": "TD-2",
+      "category": "tech-debt",
+      "name": "Migrations take ACCESS EXCLUSIVE locks",
+      "description": "AlterUniqueTogether, AddConstraint and the db_index=True fields in the 0003/0004 batch each lock the whole table for the duration. Milliseconds locally, an outage on a large table. Before any production rollout, rewrite as CREATE INDEX CONCURRENTLY / NOT VALID + VALIDATE CONSTRAINT",
+      "done": false
+    },
+    {
+      "id": "TD-3",
+      "category": "tech-debt",
+      "name": "ManagerPermissionMixin applied inconsistently across admins",
+      "description": "The mixin governs who may write in django admin but is mixed into some admin classes and not others; the two admins created for soft-delete restore (working_form, evaluation_form) deliberately skipped it pending a decision. Settle the rule and apply it uniformly - see .claude/rules/api/admin.md",
+      "done": false
+    },
 
     {
       "id": "QA-1",
       "category": "quality",
       "name": "Test suite",
       "description": "Unit + API tests for services, permissions, cloning logic, WebSocket consumers; coverage reporting. Partially done: question and project viewsets are fully covered and mutation-checked, and the three form stages have soft-delete tests. Still untouched: the three clone_* functions in services.py (highest bug density in the repo), most permission classes, and working_form/consumers.py. See .claude/rules/testing.md for the current baseline.",
+      "done": false
+    },
+    {
+      "id": "QA-7",
+      "category": "quality",
+      "name": "Soft-delete edge cases left uncovered",
+      "description": "Knowingly out of scope when soft delete landed: concurrent DELETE by two admins (both get 204, deleted_by is whoever wrote last); restoring a form whose tech_stack/project was deactivated meanwhile (is_active is filtered in views, so the form returns with a hidden reference); hard delete from admin while other stages still hold FKs (SET_NULL vs PROTECT behave differently for working and evaluation forms)",
       "done": false
     },
     {
