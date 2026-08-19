@@ -361,3 +361,9 @@ pyrightconfig.json
 
 # local DB dumps
 backup_before_migrations.sql
+
+# scaffold-tests mutation check writes these next to the target file, on purpose:
+# a hard kill leaves the backup in plain sight instead of losing it under TMPDIR
+*.verify-backup
+*.verify-log
+*.verify-list-err

@@ -53,7 +53,7 @@ evaluation_form_service/
 ├── templates/reports/         # evaluation_report.html - rendered by generate_html_report()
 ├── fixtures/                  # initial_data.json
 ├── docs/orchestration/        # per-feature plans (Ukrainian)
-└── .claude/                   # rules/ grouped by layer (api, data, domain, infra, integrations) + hooks/
+└── .claude/                   # rules/ by layer (api, data, domain, infra, integrations) + hooks/ + skills/scaffold-tests (scripts, references, templates)
 ```
 
 `check-layout-drift.sh` verifies this tree against the real structure. Indentation is a
