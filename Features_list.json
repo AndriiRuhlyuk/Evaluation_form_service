@@ -147,15 +147,36 @@
     {
       "id": "BUG-1",
       "category": "bug",
-      "name": "create_working_form declares IsRecruiter but enforces IsManagerOrSuperuser",
-      "description": "template_form/views.py:322 sets permission_classes=[IsAuthenticated, IsRecruiter] on the @action, but TemplateFormViewSet.get_permissions() overrides it for every non-read action. A recruiter gets 403 on an endpoint documented as theirs. Decide who really owns this action, then either honour the decorator in get_permissions() or fix the declaration; the test at template_form/tests.py carries a comment about it",
+      "name": "ProjectViewSet: anonymous clients can read and write projects",
+      "description": "project/views.py get_permissions() never consults permission_classes = [IsAuthenticated, IsEmployee]: list and retrieve get an empty permission list (DRF treats that as no checks at all) and create/update/partial_update get AllowAny. Only destroy and restore require IsEmployee. Actual behaviour is pinned by project/tests/tests_projects.py (test_create_is_open_to_anonymous, test_partial_update_is_open_to_anonymous, test_is_authenticated_is_declared_but_never_applied) - fixing the view will turn those three red on purpose.",
       "done": false
     },
     {
       "id": "BUG-2",
       "category": "bug",
-      "name": "Unordered querysets behind paginated form lists",
-      "description": "DRF raises UnorderedObjectListWarning for TemplateForm and WorkingForm list endpoints: without a default ordering, Postgres may return rows in any order, so the same row can appear on two pages while another disappears. Add Meta.ordering to the form models (or .order_by() in the viewsets)",
+      "name": "Form-encoded project writes silently set is_active=False",
+      "description": "ProjectSerializer exposes is_active, and DRF sets BooleanField.default_empty_html = False, so for multipart/form bodies a missing boolean is read as False rather than as 'not supplied'. A POST without is_active therefore creates a project that get_queryset() hides from the default list, and a PUT deactivates an existing one; the identical body sent as JSON keeps is_active=True. Pinned by test_create_via_form_data_lands_inactive and test_put_without_is_active_deactivates_project. The same trap applies to any serializer exposing a BooleanField whose model default is True.",
+      "done": false
+    },
+    {
+      "id": "BUG-3",
+      "category": "bug",
+      "name": "Project restore response nests the project under a 'topic' key",
+      "description": "project/views.py restore() returns {'message': ..., 'topic': serializer.data} - a copy-paste artefact from the topic app. Renaming the key to 'project' is a breaking change for existing clients, so it is recorded rather than corrected. Pinned by test_restore_response_nests_project_under_topic_key.",
+      "done": false
+    },
+    {
+      "id": "BUG-4",
+      "category": "bug",
+      "name": "Unordered querysets paginated in template_form and working_form",
+      "description": "A full test run emits DRF's UnorderedObjectListWarning for TemplateForm and WorkingForm: their list querysets have no deterministic ordering, so PageNumberPagination can return the same row on two pages and skip another as rows are inserted. Neither model sets Meta.ordering and neither viewset applies an explicit order_by. Project, Question, Topic and TechStack are unaffected - they all declare Meta.ordering. Surfaced while unifying the test layout (QA-6), not covered by any test yet.",
+      "done": false
+    },
+    {
+      "id": "BUG-5",
+      "category": "bug",
+      "name": "create_working_form declares IsRecruiter but enforces IsManagerOrSuperuser",
+      "description": "template_form/views.py:322 sets permission_classes=[IsAuthenticated, IsRecruiter] on the @action, but TemplateFormViewSet.get_permissions() overrides it for every non-read action. A recruiter gets 403 on an endpoint documented as theirs. Decide who really owns this action, then either honour the decorator in get_permissions() or fix the declaration; the test at template_form/tests/tests_template_forms.py carries a comment about it",
       "done": false
     },
     {
@@ -179,15 +200,16 @@
       "description": "The mixin governs who may write in django admin but is mixed into some admin classes and not others; the two admins created for soft-delete restore (working_form, evaluation_form) deliberately skipped it pending a decision. Settle the rule and apply it uniformly - see .claude/rules/api/admin.md",
       "done": false
     },
+
     {
       "id": "QA-1",
       "category": "quality",
       "name": "Test suite",
-      "description": "Unit + API tests for services, permissions, cloning logic, WebSocket consumers; coverage reporting. As of 2026-08-19 the suite actually runs (debug_toolbar used to abort every run) and holds 22 tests covering form-level soft delete only - the three clone_* functions, most permission classes and the consumer remain uncovered",
+      "description": "Unit + API tests for services, permissions, cloning logic, WebSocket consumers; coverage reporting. Partially done: question and project viewsets are fully covered and mutation-checked, and the three form stages have soft-delete tests. Still untouched: the three clone_* functions in services.py (highest bug density in the repo), most permission classes, and working_form/consumers.py. See .claude/rules/testing.md for the current baseline.",
       "done": false
     },
     {
-      "id": "QA-3",
+      "id": "QA-7",
       "category": "quality",
       "name": "Soft-delete edge cases left uncovered",
       "description": "Knowingly out of scope when soft delete landed: concurrent DELETE by two admins (both get 204, deleted_by is whoever wrote last); restoring a form whose tech_stack/project was deactivated meanwhile (is_active is filtered in views, so the form returns with a hidden reference); hard delete from admin while other stages still hold FKs (SET_NULL vs PROTECT behave differently for working and evaluation forms)",
@@ -198,6 +220,34 @@
       "category": "quality",
       "name": "CI/CD pipeline",
       "description": "GitHub Actions: lint (flake8/black), tests, migration check, build & deploy",
+      "done": false
+    },
+    {
+      "id": "QA-3",
+      "category": "quality",
+      "name": "Test coverage for the employee app",
+      "description": "employee has no test file at all - zero tests for AUTH_USER_MODEL, the JWT endpoints (register/me/logout/token), CustomUserManager.create_user defaulting is_staff=True, and IsAdminUserOrReadOnly. It is the last app with no coverage.",
+      "done": false
+    },
+    {
+      "id": "QA-4",
+      "category": "quality",
+      "name": "Delete leftover startapp test stubs",
+      "description": "employee/tests.py and question/tests/tests.py contained only the generated '# Create your tests here.' comment. An empty stub reads as 'this app has tests' in any file listing and inflated the scaffold-tests preflight inventory. Both deleted; employee now has no test file, which is the honest signal.",
+      "done": true
+    },
+    {
+      "id": "QA-6",
+      "category": "quality",
+      "name": "One test layout canon: a tests/ package in every app",
+      "description": "The repo carried two layouts (tests/ package in question, topic, techstack; flat tests.py in template_form, working_form, evaluation_form, project, employee). Unified on the package: <app>/tests/__init__.py plus one file per concern named tests_<plural>.py, moved with git mv so line history survives. Rationale: the cover-first order in .claude/rules/testing.md (services.py, permissions.py, consumers.py) means several test modules per app, which a flat file cannot hold. Updated with it: .claude/rules/testing.md, the scaffold-tests conventions and SKILL example, and the preflight destination check, which now always proposes a package instead of falling back to a flat module.",
+      "done": true
+    },
+    {
+      "id": "QA-5",
+      "category": "quality",
+      "name": "Deduplicate the four IsEmployee permission classes",
+      "description": "question, topic, techstack and project each carry a verbatim copy of IsEmployee. Changing one leaves the other three on the old behaviour and no test detects the drift. Note the class is effectively an IsAuthenticated alias: it does an isinstance check against Employee, which is AUTH_USER_MODEL, so every logged-in user passes it.",
       "done": false
     },
     {
