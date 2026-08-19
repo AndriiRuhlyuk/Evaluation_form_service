@@ -47,12 +47,49 @@ class WorkingFormViewSet(
     mixins.DestroyModelMixin,
     viewsets.GenericViewSet,
 ):
+    """
+    A ViewSet for managing working forms (`WorkingForm`).
+
+    Provides operations for viewing, updating, deleting, and approving
+    working forms, as well as additional actions for topic management,
+    cloning, and creating evaluation forms.
+
+    **Key features:**
+    - List and detail views with optimized prefetching per action.
+    - Approval workflow (approve / unapprove) with WebSocket notifications.
+    - Adding topics to a working form.
+    - Restoring soft-deleted topics.
+    - Cloning a working form into the new one.
+    - Creating an evaluation form from an approved working form.
+
+    **Endpoints:**
+    - `GET /api/working-form/` — List of working forms.
+    - `GET /api/working-form/{slug}/` — Working form details.
+    - `PUT/PATCH /api/working-form/{slug}/` — Update a working form.
+    - `DELETE /api/working-form/{slug}/` — Soft-delete a working form.
+    - `POST /api/working-form/{slug}/approve/` — Approve the form.
+    - `POST /api/working-form/{slug}/unapprove/` — Revoke approval.
+    - `POST /api/working-form/{slug}/add-topic/` — Add a topic.
+    - `GET /api/working-form/{slug}/restore-topic/` — List soft-deleted topics.
+    - `POST /api/working-form/{slug}/create-evaluation/` — Create the evaluation form.
+    - `GET/POST /api/working-form/{slug}/clone/` — Clone the working form.
+    """
 
     lookup_field = "slug"
 
     queryset = WorkingForm.objects.select_related("tech_stack", "hiring_manager")
 
     def get_serializer_class(self):
+        """
+        Selects the serializer class based on the current action.
+
+        - `add_topic`: `AddTopicSerializer` for topic input validation.
+        - `retrieve`: `WorkingFormDetailSerializer` for full representation.
+        - `update`, `partial_update`: `WorkingFormUpdateSerializer` for editing.
+        - `create_evaluation_form`: `CreateEvaluationFormSerializer`.
+        - `clone`: `WorkingFormCreateSerializer` for cloning input.
+        - Default (`list`): `WorkingFormListSerializer` for a concise list view.
+        """
         if self.action == "add_topic":
             return AddTopicSerializer
         if self.action == "retrieve":
@@ -66,6 +103,16 @@ class WorkingFormViewSet(
         return WorkingFormListSerializer
 
     def get_permissions(self):
+        """
+        Determines access permissions based on the action.
+
+        - `update`, `partial_update`: `IsAuthenticated` + `CanEditWorkingForm`.
+        - `create_evaluation_form`: `IsAuthenticated` + `CanCreateEvaluationForm`.
+        - `approve`, `unapprove`, `add_topic`, `restore_topic`: `IsAuthenticated` + `CanInteractWithWorkingForm`.
+        - `destroy`: `IsAuthenticated` + `IsAdminUser`.
+        - `clone`: `IsAdminUser` + `IsRecruiter`.
+        - Default: `IsAuthenticated`.
+        """
         if self.action in [
             "update",
             "partial_update",
@@ -81,26 +128,55 @@ class WorkingFormViewSet(
             return [permissions.IsAdminUser(), IsRecruiter()]
         return [permissions.IsAuthenticated()]
 
+    def perform_destroy(self, instance):
+        """
+        Soft-deletes the working form instead of removing the database row.
+
+        Without this override DRF's DestroyModelMixin would call
+        `instance.delete()` - a hard delete, contradicting the `is_deleted`
+        flag this model carries. Restoring is admin-only (django admin).
+        """
+        instance.soft_delete(self.request.user)
+
     def _get_form_topics_prefetch(self):
         """
-        Return Prefetch-object for topics with annotations
-        that counts in custom manager in nodel.
+        Returns a Prefetch object for form topics with annotations.
+
+        This helper method creates a consistent prefetch specification for form topics
+        that includes annotations for vote counts and question counts, as well as
+        prefetching the nested item deletion votes.
+
+        The method uses `WorkingFormTopicManager.get_annotated_list()` to add computed
+        fields and ensures consistent ordering by topic name. This prefetch object
+        is used in both `retrieve` and `update` flows to optimize database queries.
+
+        Returns:
+            Prefetch: A configured Prefetch object for form_topics with annotations
+                      and nested prefetches
         """
         return Prefetch(
+            # The relation name to prefetch
             "form_topics",
+            # The queryset to use for prefetching, with annotations and ordering
             queryset=WorkingFormTopic.objects.get_annotated_list()
-            .filter(is_removed=False)
-            .order_by("topic__name")
-            .prefetch_related("items__deleted_by"),
+            .order_by("topic__name")  # Sort topics alphabetically by name
+            .prefetch_related(
+                "items__deleted_by"
+            ),  # Also prefetch deletion votes for items
         )
 
     def get_queryset(self):
         """
-        Separate prefetch/annotate data for different actions:
-        - list (annotate count approvers/interviewers)
-        - retrieve (M2M relations)
-        - update/partial_update/approve/add_topic (prefetch approvers/interviewers)
-        to avoid conflicts (prefetch/annotate)
+        Returns an optimized queryset based on the current action.
+
+        Each action gets only the prefetches/annotations it needs to avoid
+        conflicts between `prefetch_related` and `annotate`:
+
+        - `list`: annotates approver/interviewer counts, prefetches topics.
+        - `retrieve`: prefetches all M2M relations for full detail view.
+        - `update`, `partial_update`: prefetches recruiters and approved_by.
+        - `approve`, `unapprove`, `add_topic`, `restore_topic`: prefetches approvers.
+        - `create_evaluation_form`: prefetches recruiters.
         """
 
         queryset = super().get_queryset()
@@ -131,8 +207,10 @@ class WorkingFormViewSet(
 
     def retrieve(self, request, *args, **kwargs):
         """
-        Take instance with cashed data (interviewers/approvers),
-        reloads prefetched topics and gives all data to serializer.
+        Retrieves a single working form with full detail data.
+
+        Loads the instance with prefetched M2M relations from `get_queryset`,
+        then additionally prefetches annotated topics via `_get_form_topics_prefetch`.
         """
 
         instance = self.get_object()
@@ -144,42 +222,71 @@ class WorkingFormViewSet(
 
     def perform_update(self, serializer):
         """
-        Take validated lists (from serializer) and use
-        them in WebSocket message after saving (no cash)
-        - Save instance,
-        - RELOAD M2M-cash (for response in serializer in update)
-        """
+        Saves the working form and sends a WebSocket notification.
 
+        This method extends the standard perform_update behavior to include
+        real-time collaboration features. After saving the form, it:
+
+        1. Reloads M2M relationship caches to ensure fresh data
+        2. Prepares a data payload with the updated form metadata
+        3. Broadcasts the update to all connected clients via WebSockets
+
+        This ensures that all users viewing the form see updates in real-time
+        without needing to refresh their browser.
+
+        Args:
+            serializer: The validated serializer instance with form data
+
+        Returns:
+            WorkingForm: The saved form instance
+        """
+        # Save the form instance with the validated data
         form_instance = serializer.save()
 
+        # Reload M2M caches to ensure we have fresh data after saving
         prefetch_related_objects(
             [form_instance], "interviewers", "approvers", "recruiters"
         )
 
-        interviewers_list = serializer._interviewers_list
-        approvers_list = serializer._approvers_list
-        recruiters_list = serializer._recruiters_list
-        hiring_manager_obj = serializer._hiring_manager_obj
+        # Get the cached lists of related objects from the serializer
+        interviewers_list = (
+            serializer._interviewers_list
+        )  # List of interviewer employees
+        approvers_list = serializer._approvers_list  # List of approver employees
+        recruiters_list = serializer._recruiters_list  # List of recruiter employees
+        hiring_manager_obj = serializer._hiring_manager_obj  # Hiring manager employee
 
-        channel_layer = get_channel_layer()
-        form_group_name = f"form_{form_instance.id}"
+        # Prepare WebSocket notification
+        channel_layer = get_channel_layer()  # Get the ASGI channel layer
+        form_group_name = f"form_{form_instance.id}"  # Channel group name for this form
+
+        # Prepare the data payload with updated form metadata
         updated_data = {
-            "vacancy": form_instance.vacancy,
-            "level": form_instance.get_level_display(),
-            "project": form_instance.project,
+            "vacancy": form_instance.vacancy,  # Job vacancy title
+            "level": form_instance.get_level_display(),  # Human-readable experience level
+            "project": (
+                form_instance.project.name if form_instance.project else ""
+            ),  # Project name
+            # Serialize the related employees for the frontend
             "interviewers": SimpleEmployeeSerializer(interviewers_list, many=True).data,
             "approvers": SimpleEmployeeSerializer(approvers_list, many=True).data,
             "recruiters": SimpleEmployeeSerializer(recruiters_list, many=True).data,
             "hiring_manager": SimpleEmployeeSerializer(hiring_manager_obj).data,
         }
+
+        # Send the update to all clients connected to this form's WebSocket group
         async_to_sync(channel_layer.group_send)(
             form_group_name, {"type": "form_metadata_updated", "data": updated_data}
         )
 
+        return form_instance
+
     def update(self, request, *args, **kwargs):
         """
-        Update instance, with prefetched interviewers/approvers (from perform update)
-        for response alive cashed topics (_get_form_topics_prefetch)
+        Updates the working form and returns the full detail representation.
+
+        Delegates saving and WebSocket notification to `perform_update`, then
+        reloads annotated topics for the response via `_get_form_topics_prefetch`.
         """
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
@@ -200,47 +307,91 @@ class WorkingFormViewSet(
     @action(detail=True, methods=["post"], url_path="add-topic")
     def add_topic(self, request, slug=None):
         """
-        POST: Adds a new or existing topic to the working form.
-        Input: {"id": 1} OR {"name": "New Topic Name"}
-        Send message to WebSocket about adding a new topic.
-        """
+        Add a new or existing topic to the working form.
 
+        This action endpoint allows users to add topics to a working form in two ways:
+        1. By referencing an existing topic via its ID: `{"id": <topic_pk>}`
+        2. By creating a new topic with a name: `{"name": "Topic Name"}`
+
+        After successfully adding the topic, a WebSocket notification is sent to
+        all connected clients so they can update their UI in real-time.
+
+        URL: POST /api/working-form/{slug}/add-topic/
+
+        Args:
+            request: The HTTP request
+            slug: The slug of the working form
+
+        Returns:
+            Response: The serialized topic data with 201 Created status on success,
+                     or 400 Bad Request with error details on failure
+        """
+        # Get the working form instance
         form = self.get_object()
 
+        # Validate the input data
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         try:
+            # Call the service function to add the topic to the form
             new_form_topic = add_topic_to_working_form(form, serializer.validated_data)
         except ValidationError as e:
+            # Return validation errors if any
             return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
 
-        channel_layer = get_channel_layer()
-        form_group_name = f"form_{form.id}"
+        # Prepare WebSocket notification
+        channel_layer = get_channel_layer()  # Get the ASGI channel layer
+        form_group_name = f"form_{form.id}"  # Channel group name for this form
+        # Serialize the topic for the frontend
         topic_data = TopicSerializer(new_form_topic.topic).data
 
+        # Send the notification to all connected clients
         async_to_sync(channel_layer.group_send)(
             form_group_name,
             {
-                "type": "topic_added",
-                "topic": topic_data,
+                "type": "topic_added",  # Event type that will be handled by the consumer
+                "topic": topic_data,  # Topic data to be sent to clients
             },
         )
 
+        # Return the created topic data with 201 Created status
         return Response(topic_data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["get"], url_path="restore-topic")
     def restore_topic(self, request, slug=None):
         """
-        GET: Returns a list of soft-deleted topics for this form.
-        Restoration is handled via WebSocket 'toggle_topic_vote' action.
+        Retrieve a list of soft-deleted topics that can be restored.
+
+        This endpoint returns all topics that have been soft-deleted from the
+        working form. These topics can be restored through the WebSocket
+        `toggle_topic_vote` action, which allows users to vote on restoring
+        a topic.
+
+        The endpoint uses the special `all_objects` manager which includes
+        soft-deleted records, and adds annotations for vote counts and other
+        metadata needed for the restoration UI.
+
+        URL: GET /api/working-form/{slug}/restore-topic/
+
+        Args:
+            request: The HTTP request
+            slug: The slug of the working form
+
+        Returns:
+            Response: A list of serialized soft-deleted topics with their metadata
         """
+        # Get the working form instance
         form = self.get_object()
 
-        deleted_topics = WorkingFormTopic.objects.get_annotated_list().filter(
-            working_form=form, is_removed=True
+        # Query for soft-deleted topics using the all_objects manager
+        # This manager includes records with is_removed=True
+        deleted_topics = WorkingFormTopic.all_objects.get_annotated_list().filter(
+            working_form=form,  # Filter to this form only
+            is_removed=True,  # Only include removed topics
         )
 
+        # Serialize the deleted topics for the response
         serializer = WorkingFormTopicListSerializer(
             deleted_topics, many=True, context={"request": request}
         )
@@ -249,74 +400,132 @@ class WorkingFormViewSet(
     @action(detail=True, methods=["post"])
     def approve(self, request, slug=None):
         """
-        POST: Approves WorkingForm instance by approvers.
-        Check user in approvers list.
-        Add the current user to the approved_by list and sets
-        the form status to APPROVED.
-        Send message to WebSocket about approve instance.
+        Add the current user's approval to the working form.
+
+        This action allows a user to approve a working form, which is part of the
+        form's approval workflow. When all approvers have approved the form, its
+        status changes to APPROVED, making it available for creating evaluation forms.
+
+        The endpoint handles these cases:
+        - If the user has already approved the form, returns 'already_approved'
+        - If this is a new approval, adds the user to approved_by and returns 'approval_added'
+        - If all approvers have now approved, updates the form status to APPROVED
+
+        After processing, a WebSocket notification is sent to all connected clients
+        so they can update their UI in real-time.
+
+        URL: POST /api/working-form/{slug}/approve/
+
+        Args:
+            request: The HTTP request
+            slug: The slug of the working form
+
+        Returns:
+            Response: JSON with approval status, form status, and list of approvers
         """
+        # Get the working form instance
         form = self.get_object()
         user = request.user
 
-        approved_by_ids = {u.pk for u in form.approved_by.all()}
-        user_has_approved = user.pk in approved_by_ids
+        # Check if the user has already approved this form
+        approved_by_ids = {
+            u.pk for u in form.approved_by.all()
+        }  # Set of user IDs who approved
+        user_has_approved = (
+            user.pk in approved_by_ids
+        )  # Whether this user already approved
 
+        # Handle the approval action
         if user_has_approved:
+            # User already approved - no changes needed
             action_result = "already_approved"
         else:
+            # Add the user's approval
             form.approved_by.add(user)
             action_result = "approval_added"
 
+        # Refresh related objects to ensure we have current data
         prefetch_related_objects([form], "approved_by", "approvers")
 
+        # Check if the form is now fully approved (all approvers have approved)
         is_approved = form.is_fully_approved
 
+        # Update the form status based on approval state
         if is_approved:
-            form.status = WorkingForm.Status.APPROVED
+            form.status = WorkingForm.Status.APPROVED  # All approvers have approved
         else:
-            form.status = WorkingForm.Status.IN_PROGRESS
+            form.status = (
+                WorkingForm.Status.IN_PROGRESS
+            )  # Still waiting for some approvals
 
+        # Save the updated status
         form.save(update_fields=["status"])
 
+        # Prepare response data
         response_data = {
-            "action_result": action_result,
-            "is_fully_approved": is_approved,
-            "form_status": form.status,
+            "action_result": action_result,  # What happened with this request
+            "is_fully_approved": is_approved,  # Whether all approvers have approved
+            "form_status": form.status,  # Current form status
             "approved_by": SimpleEmployeeSerializer(
                 form.approved_by.all(), many=True
-            ).data,
+            ).data,  # List of users who approved
         }
 
-        channel_layer = get_channel_layer()
-        form_group_name = f"form_{form.id}"
+        # Prepare WebSocket notification
+        channel_layer = get_channel_layer()  # Get the ASGI channel layer
+        form_group_name = f"form_{form.id}"  # Channel group name for this form
 
+        # Send the notification to all connected clients
         async_to_sync(channel_layer.group_send)(
             form_group_name,
             {
-                "type": "approval_update",
-                "data": response_data,
+                "type": "approval_update",  # Event type that will be handled by the consumer
+                "data": response_data,  # Approval data to be sent to clients
             },
         )
 
-        return Response(
-            {"action_result": action_result, **response_data}, status=status.HTTP_200_OK
-        )
+        # Return the approval data
+        return Response(response_data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"], url_path="unapprove")
     def unapprove(self, request, slug=None):
         """
-        POST: Un-approves the Working Form instance to allow editing.
-        Check user in approvers list.
-        Removes the current user from the approved_by list and sets
-        the form status back to IN_PROGRESS.
-        Send message to WebSocket about approve instance.
+        Revoke the current user's approval to allow further editing of the form.
+
+        This action allows a user to withdraw their approval from a working form,
+        which is necessary to make changes after approving. When any approval is
+        withdrawn, the form's status is reset to IN_PROGRESS, allowing edits.
+
+        The endpoint handles these cases:
+        - If the form is already in progress and the user hasn't approved, returns early
+        - If the user has approved, removes their approval
+        - Always sets the form status to IN_PROGRESS
+
+        After processing, a WebSocket notification is sent to all connected clients
+        so they can update their UI in real-time.
+
+        URL: POST /api/working-form/{slug}/unapprove/
+
+        Args:
+            request: The HTTP request
+            slug: The slug of the working form
+
+        Returns:
+            Response: JSON with approval status, form status, and list of approvers
         """
+        # Get the working form instance
         form = self.get_object()
         user = request.user
 
-        approved_by_ids = {u.pk for u in form.approved_by.all()}
-        user_has_approved = user.pk in approved_by_ids
+        # Check if the user has already approved this form
+        approved_by_ids = {
+            u.pk for u in form.approved_by.all()
+        }  # Set of user IDs who approved
+        user_has_approved = (
+            user.pk in approved_by_ids
+        )  # Whether this user already approved
 
+        # If form is already in progress and user hasn't approved, nothing to do
         if form.status == WorkingForm.Status.IN_PROGRESS and not user_has_approved:
             return Response(
                 {
@@ -325,31 +534,41 @@ class WorkingFormViewSet(
                 status=status.HTTP_200_OK,
             )
 
+        # Remove user's approval if they had approved
         if user_has_approved:
             form.approved_by.remove(user)
 
-        form.status = WorkingForm.Status.IN_PROGRESS
+        # Always set form status to IN_PROGRESS when unapproving
+        form.status = WorkingForm.Status.IN_PROGRESS  # Allow edits to the form
         form.save(update_fields=["status"])
 
+        # Refresh related objects to ensure we have current data
         prefetch_related_objects([form], "approved_by")
 
+        # Prepare response data
         response_data = {
-            "action_result": "unapproved_for_edit",
-            "is_fully_approved": False,
-            "form_status": form.status,
+            "action_result": "unapproved_for_edit",  # What happened with this request
+            "is_fully_approved": False,  # Form is no longer fully approved
+            "form_status": form.status,  # Current form status (IN_PROGRESS)
             "approved_by": SimpleEmployeeSerializer(
                 form.approved_by.all(), many=True
-            ).data,
+            ).data,  # Updated list of users who approved
         }
 
-        channel_layer = get_channel_layer()
-        form_group_name = f"form_{form.id}"
+        # Prepare WebSocket notification
+        channel_layer = get_channel_layer()  # Get the ASGI channel layer
+        form_group_name = f"form_{form.id}"  # Channel group name for this form
 
+        # Send the notification to all connected clients
         async_to_sync(channel_layer.group_send)(
             form_group_name,
-            {"type": "approval_update", "data": response_data},
+            {
+                "type": "approval_update",
+                "data": response_data,
+            },  # Same event type as approve
         )
 
+        # Return the updated approval data
         return Response(response_data, status=status.HTTP_200_OK)
 
     @action(
@@ -359,27 +578,56 @@ class WorkingFormViewSet(
     )
     def create_evaluation_form(self, request, slug=None):
         """
-        Creates a new EvaluationForm from this (APPROVED) WorkingForm.
-        """
+        Create a new evaluation form from an approved working form.
 
+        This action creates a concrete evaluation form that can be used in an
+        actual interview. It takes an approved working form template and creates
+        a new evaluation form instance with all the topics and questions from
+        the working form, along with candidate and interview details.
+
+        The endpoint requires:
+        - The working form must be in APPROVED status
+        - The user must have permission to create evaluations (recruiter or superuser)
+        - Candidate and interview datetime must be provided
+
+        URL: POST /api/working-form/{slug}/create-evaluation/
+
+        Args:
+            request: The HTTP request with candidate and interview details
+            slug: The slug of the working form to create an evaluation from
+
+        Returns:
+            Response: The serialized evaluation form data with 201 Created status on success,
+                     or 400 Bad Request with error details on failure
+        """
+        # Get the working form instance
         working_form = self.get_object()
 
+        # Validate the input data (candidate, interview datetime)
         input_serializer = CreateEvaluationFormSerializer(data=request.data)
         input_serializer.is_valid(raise_exception=True)
 
-        prepared_data = input_serializer.save()
+        # Process the validated data
+        prepared_data = (
+            input_serializer.save()
+        )  # This doesn't save to DB, just prepares data
 
         try:
+            # Call the service function to create the evaluation form
+            # This deep-copies the form structure (topics, items, interviewers)
             evaluation_form = clone_working_to_evaluation(
                 working_form=working_form, **prepared_data
             )
         except ValidationError as e:
+            # Return validation errors if any
             return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
 
+        # Serialize the created evaluation form for the response
         output_serializer = RecruiterEvaluationSerializer(
             evaluation_form, context={"request": request}
         )
 
+        # Return the created evaluation form data with 201 Created status
         return Response(output_serializer.data, status=status.HTTP_201_CREATED)
 
     @action(
@@ -389,10 +637,14 @@ class WorkingFormViewSet(
     )
     def clone(self, request, slug=None):
         """
-        Clone WorkingForm.
-        - GET: Return fields (WorkingFormCreateSerializer),
-               filled data from 'original_form'.
-        - POST: Take updated data, validate it, create deep copy with new data.
+        GET/POST /api/working-form/{slug}/clone/
+        Clones the working form into a new instance.
+
+        - **GET**: Returns pre-filled initial data (vacancy, level, project,
+          interviewers, approvers, recruiters) from the original form.
+        - **POST**: Validates input via `WorkingFormCreateSerializer` and
+          creates a deep copy (topics, items) with the new metadata via
+          the `clone_working_from_working` service.
         """
         original_form = self.get_object()
 
@@ -400,7 +652,7 @@ class WorkingFormViewSet(
             initial_data = {
                 "vacancy": f"{original_form.vacancy} (Copy)",
                 "level": original_form.level,
-                "project": original_form.project,
+                "project": original_form.project_id,
                 "interviewers": list(
                     original_form.interviewers.values_list("pk", flat=True)
                 ),
@@ -413,30 +665,22 @@ class WorkingFormViewSet(
 
             return Response(initial_data)
 
-        elif request.method == "POST":
-            context = self.get_serializer_context()
-            context["request"] = request
+        # POST method
+        context = self.get_serializer_context()
 
-            serializer = self.get_serializer(data=request.data, context=context)
-            serializer.is_valid(raise_exception=True)
+        serializer = self.get_serializer(data=request.data, context=context)
+        serializer.is_valid(raise_exception=True)
 
-            try:
-                new_form = clone_working_from_working(
-                    original_form=original_form,
-                    validated_data=serializer.validated_data,
-                )
-            except Exception as e:
-                return Response(
-                    {"error": f"Failed to clone form: {str(e)}"},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
+        try:
+            new_form = clone_working_from_working(
+                original_form=original_form,
+                validated_data=serializer.validated_data,
+            )
+        except ValidationError as e:
+            return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
 
-            output_serializer = WorkingFormDetailSerializer(new_form, context=context)
-            return Response(output_serializer.data, status=status.HTTP_201_CREATED)
-
-        return Response(
-            {"detail": "Method not allowed."}, status=status.HTTP_405_METHOD_NOT_ALLOWED
-        )
+        output_serializer = WorkingFormDetailSerializer(new_form, context=context)
+        return Response(output_serializer.data, status=status.HTTP_201_CREATED)
 
 
 class WorkingFormItemViewSet(
@@ -445,34 +689,58 @@ class WorkingFormItemViewSet(
     mixins.UpdateModelMixin,
     viewsets.GenericViewSet,
 ):
-    """ """
+    """
+    A ViewSet for managing items (questions) within a working form.
 
-    queryset = WorkingFormItem.objects.select_related(
-        "form_topic__working_form", "origin_question"
-    ).prefetch_related("deleted_by")
+    Provides list, detail, and update operations for `WorkingFormItem`
+    instances that belong to a specific working form (resolved via the
+    `working_form_slug` URL parameter).
+
+    **Key features:**
+    - Annotated queryset with delete vote counts and total approvers.
+    - WebSocket notification on item updates.
+
+    **Endpoints:**
+    - `GET /api/working-form/{slug}/items/` — List items for the form.
+    - `GET /api/working-form/{slug}/items/{pk}/` — Item details.
+    - `PUT/PATCH /api/working-form/{slug}/items/{pk}/` — Update an item.
+    """
+
+    queryset = WorkingFormItem.objects.all()
 
     def get_permissions(self):
+        """
+        Determines access permissions based on the action.
+
+        - `update`, `partial_update`: `IsAuthenticated` + `CanInteractWithWorkingForm`.
+        - Default: `IsAuthenticated`.
+        """
         if self.action in ["update", "partial_update"]:
             return [permissions.IsAuthenticated(), CanInteractWithWorkingForm()]
         return [permissions.IsAuthenticated()]
 
     def get_queryset(self):
         """
-        Filter items to only those belonging to the specified working form.
-        All optimization logic is now in the manager.
+        Returns items belonging to the working form identified by `working_form_slug`.
+
+        Uses the manager's `get_annotated_list()` to add `delete_votes` and
+        `total_approvers` annotations.
         """
         return WorkingFormItem.objects.get_annotated_list().filter(
             form_topic__working_form__slug=self.kwargs["working_form_slug"],
-            is_removed=False,
         )
 
     def get_serializer_class(self):
+        """Returns `WorkingFormItemSerializer` for all actions."""
         return WorkingFormItemSerializer
 
     def perform_update(self, serializer) -> dict:
         """
-        Update WorkingFormItem instance.
-        Send message to WebSocket about changed item.
+        Saves the item and broadcasts the update via WebSocket.
+
+        After saving, reloads `deleted_by` for the response serializer and
+        sends the serialized item data to the form's WebSocket group.
+        Returns the serialized data dict for use by `update()`.
         """
         item = serializer.save()
 
@@ -494,8 +762,10 @@ class WorkingFormItemViewSet(
 
     def update(self, request, *args, **kwargs):
         """
-        Proxies item data (dict), which return perform_update,
-        and put it to response without double serialization
+        Updates the item and returns already-serialized data from `perform_update`.
+
+        Avoids double serialization by using the dict returned by `perform_update`
+        directly in the response.
         """
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
@@ -510,7 +780,22 @@ class WorkingFormItemViewSet(
 
 class WorkingFormTopicViewSet(viewsets.ReadOnlyModelViewSet):
     """
-    ViewSet for interacting with topics within a specific WorkingForm.
+    A ViewSet for managing topics within a specific working form.
+
+    Provides read-only access (list, detail) plus custom actions for adding
+    questions and viewing soft-deleted items for restoration.
+
+    **Key features:**
+    - Annotated list with vote counts, question counts, and deletion candidates.
+    - Detail view with prefetched items and their delete-vote annotations.
+    - Adding questions to a topic with WebSocket notification.
+    - Viewing soft-deleted items for restoration.
+
+    **Endpoints:**
+    - `GET /api/working-form/{slug}/topics/` — List topics for the form.
+    - `GET /api/working-form/{slug}/topics/{pk}/` — Topic details with items.
+    - `POST /api/working-form/{slug}/topics/{pk}/add-question/` — Add a question.
+    - `GET /api/working-form/{slug}/topics/{pk}/restore-item/` — List soft-deleted items.
     """
 
     queryset = WorkingFormTopic.objects.all()
@@ -526,11 +811,24 @@ class WorkingFormTopicViewSet(viewsets.ReadOnlyModelViewSet):
         return [JSONRenderer]
 
     def get_permissions(self):
+        """
+        Determines access permissions based on the action.
+
+        - `add_question`, `restore_item`: `IsAuthenticated` + `CanInteractWithWorkingForm`.
+        - Default: `IsAuthenticated`.
+        """
         if self.action in ["add_question", "restore_item"]:
             return [permissions.IsAuthenticated(), CanInteractWithWorkingForm()]
         return [permissions.IsAuthenticated()]
 
     def get_serializer_class(self):
+        """
+        Selects the serializer class based on the current action.
+
+        - `add_question`: `AddQuestionToTopicSerializer` for question input validation.
+        - `retrieve`: `WorkingFormTopicDetailSerializer` for a full topic with items.
+        - Default (`list`): `WorkingFormTopicListSerializer` for a concise list view.
+        """
         if self.action == "add_question":
             return AddQuestionToTopicSerializer
         if self.action == "retrieve":
@@ -539,14 +837,18 @@ class WorkingFormTopicViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         """
-        Filter topics to only those belonging to the specified working form.
+        Returns topics belonging to the working form identified by `working_form_slug`.
+
+        Each action gets tailored prefetching:
+        - `list`: annotated with vote counts, question counts, and deletion candidates.
+        - `retrieve`: prefetches items with delete-vote annotations.
+        - `add_question`: prefetches `working_form.approvers` and `approved_by`.
+        - Default: selects related `working_form` and `topic`.
         """
         queryset = (
             super()
             .get_queryset()
-            .filter(
-                working_form__slug=self.kwargs["working_form_slug"], is_removed=False
-            )
+            .filter(working_form__slug=self.kwargs["working_form_slug"])
             .select_related("topic")
         )
 
@@ -580,7 +882,12 @@ class WorkingFormTopicViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=["post"], url_path="add-question")
     def add_question(self, request, working_form_slug=None, pk=None):
         """
-        POST: Add new question to the topic.
+        POST /api/working-form/{slug}/topics/{pk}/add-question/
+        Adds a question to the topic.
+
+        Accepts either `{"origin_question": <pk>}` to link an existing question,
+        or `{"question_text": "...", "difficulty_snapshot": ...}` to create a new
+        one. Reloads the item with annotations and broadcasts it via WebSocket.
         """
         form_topic = self.get_object()
         serializer = self.get_serializer(data=request.data)
@@ -623,12 +930,15 @@ class WorkingFormTopicViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=["get"], url_path="restore-item")
     def restore_item(self, request, working_form_slug=None, pk=None):
         """
-        GET: Returns a list of soft-deleted items for this topic.
-        Restoration is handled via WebSocket 'toggle_delete_vote' action.
+        GET /api/working-form/{slug}/topics/{pk}/restore-item/
+        Returns a list of soft-deleted items for this topic.
+
+        Uses `all_objects` manager to include removed items with annotations.
+        Actual restoration is handled via the WebSocket `toggle_delete_vote` action.
         """
         form_topic = self.get_object()
 
-        deleted_items = WorkingFormItem.objects.get_annotated_list().filter(
+        deleted_items = WorkingFormItem.all_objects.get_annotated_list().filter(
             form_topic=form_topic, is_removed=True
         )
 

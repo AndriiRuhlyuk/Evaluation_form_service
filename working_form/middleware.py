@@ -20,8 +20,8 @@ def get_user(user_id):
 
 class JwtAuthMiddleware(BaseMiddleware):
     """
-    Custom middleware for Channels, that authenticate
-    user by  JWT-token from query-param 'token'.
+    Custom middleware for Channels, which authenticate
+    the user by JWT-token from query-param 'token'.
     """
 
     async def __call__(self, scope, receive, send):

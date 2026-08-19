@@ -3,11 +3,12 @@ from django.db import models
 from unfold.admin import ModelAdmin
 from unfold.contrib.forms.widgets import WysiwygWidget
 
+from employee.admin_mixins import ManagerPermissionMixin
 from .models import TechStack
 
 
 @admin.register(TechStack)
-class TechStackAdmin(ModelAdmin):
+class TechStackAdmin(ManagerPermissionMixin, ModelAdmin):
     list_display = ["name", "is_active"]
     list_filter = ["is_active"]
     search_fields = ["name"]

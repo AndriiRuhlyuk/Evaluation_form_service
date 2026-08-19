@@ -1,0 +1,267 @@
+{
+  "project": "Evaluation Form Service",
+  "updated": "2026-07-06",
+  "legend": { "true": "implemented", "false": "planned / backlog" },
+  "features": [
+    {
+      "id": "AUTH-1",
+      "category": "auth",
+      "name": "Custom user model with email login",
+      "description": "Employee model (AbstractUser) with email as username, roles (Hiring Manager, Manager, Recruiter, Interviewer) and levels (Junior..Head)",
+      "done": true
+    },
+    {
+      "id": "AUTH-2",
+      "category": "auth",
+      "name": "JWT authentication",
+      "description": "simplejwt with refresh rotation, blacklist after rotation, last_login update",
+      "done": true
+    },
+    {
+      "id": "AUTH-3",
+      "category": "auth",
+      "name": "Role-based object permissions",
+      "description": "Per-app permission classes: only assigned interviewers score, recruiters create evaluations, approvers vote/approve working forms",
+      "done": true
+    },
+    {
+      "id": "CORE-1",
+      "category": "question-bank",
+      "name": "Question bank with topics and tech stacks",
+      "description": "Questions with difficulty (Easy/Medium/Hard), source tracking (template/added/changed/AI-generated), usage counters, soft delete",
+      "done": true
+    },
+    {
+      "id": "CORE-2",
+      "category": "reference-data",
+      "name": "Projects, Topics, TechStacks CRUD",
+      "description": "Reference data apps with is_active soft deletion and admin integration",
+      "done": true
+    },
+    {
+      "id": "TPL-1",
+      "category": "template-form",
+      "name": "Reusable interview templates",
+      "description": "TemplateForm groups topics and question snapshots; unique slug generation; read-only admin proxies",
+      "done": true
+    },
+    {
+      "id": "TPL-2",
+      "category": "template-form",
+      "name": "Draft / publish workflow for templates",
+      "description": "Unpublished changes stored in draft_data JSON; publish applies them so in-use templates stay stable",
+      "done": true
+    },
+    {
+      "id": "WF-1",
+      "category": "working-form",
+      "name": "Working forms cloned from templates",
+      "description": "Per-vacancy form with level, project, interviewers, recruiters, hiring manager; auto-generated unique name/slug with sequence numbers",
+      "done": true
+    },
+    {
+      "id": "WF-2",
+      "category": "working-form",
+      "name": "Approval workflow with voting-based deletion",
+      "description": "Approvers vote to remove topics/questions (EffectiveDeletionMixin); form approved when all approvers sign off; soft delete with history",
+      "done": true
+    },
+    {
+      "id": "WF-3",
+      "category": "working-form",
+      "name": "Real-time collaboration over WebSockets",
+      "description": "Channels + Redis consumer broadcasting votes, approvals, added topics/questions; JWT WebSocket auth middleware",
+      "done": true
+    },
+    {
+      "id": "EVAL-1",
+      "category": "evaluation",
+      "name": "Candidate evaluation forms",
+      "description": "Snapshot clone of approved working form per candidate with interview datetime and status lifecycle (pending/in_progress/completed)",
+      "done": true
+    },
+    {
+      "id": "EVAL-2",
+      "category": "evaluation",
+      "name": "Per-question scoring and interviewer feedback",
+      "description": "Scores 0-3 per interviewer per question with comments and lacks_expertise flag; final feedback (pros/cons/decision/level) with submit lock",
+      "done": true
+    },
+    {
+      "id": "EVAL-3",
+      "category": "evaluation",
+      "name": "HTML evaluation report generation",
+      "description": "Static HTML report rendered on completion and stored in media/reports",
+      "done": true
+    },
+    {
+      "id": "INT-1",
+      "category": "integration",
+      "name": "PeopleForce CRM sync",
+      "description": "Evaluation summary, decision and report link posted as a note to the candidate card via PeopleForce API",
+      "done": true
+    },
+    {
+      "id": "OPS-1",
+      "category": "infrastructure",
+      "name": "Celery background processing",
+      "description": "Worker + beat (DB scheduler) + Flower; periodic task auto-transitions evaluation status pending -> in_progress 1h before interview",
+      "done": true
+    },
+    {
+      "id": "OPS-2",
+      "category": "infrastructure",
+      "name": "Dockerized environment",
+      "description": "docker-compose with app (Daphne/ASGI), PostgreSQL 16, Redis, Celery worker/beat, Flower; wait_for_db command",
+      "done": true
+    },
+    {
+      "id": "OPS-3",
+      "category": "infrastructure",
+      "name": "OpenAPI documentation",
+      "description": "drf-spectacular schema with Swagger UI and ReDoc",
+      "done": true
+    },
+    {
+      "id": "OPS-4",
+      "category": "infrastructure",
+      "name": "Modern admin panel",
+      "description": "django-unfold theme, nested inlines, read-only proxy models",
+      "done": true
+    },
+    {
+      "id": "OPS-5",
+      "category": "api",
+      "name": "API hygiene",
+      "description": "Pagination, anon/user throttling, django-filter, nested routers for working-form topics/items",
+      "done": true
+    },
+
+    {
+      "id": "QA-1",
+      "category": "quality",
+      "name": "Test suite",
+      "description": "Unit + API tests for services, permissions, cloning logic, WebSocket consumers; coverage reporting (tests are currently placeholders)",
+      "done": false
+    },
+    {
+      "id": "QA-2",
+      "category": "quality",
+      "name": "CI/CD pipeline",
+      "description": "GitHub Actions: lint (flake8/black), tests, migration check, build & deploy",
+      "done": false
+    },
+    {
+      "id": "AI-1",
+      "category": "ai",
+      "name": "AI question generation and selection",
+      "description": "Generate/suggest questions by tech stack, topic, level and past usage; Question.source=GENERATED already reserved in the model",
+      "done": false
+    },
+    {
+      "id": "AI-2",
+      "category": "ai",
+      "name": "AI-assisted scoring",
+      "description": "Suggested score and rationale from interviewer notes/transcript; interviewer always confirms",
+      "done": false
+    },
+    {
+      "id": "AI-7",
+      "category": "ai",
+      "name": "Note-taker integration with independent AI answer scoring",
+      "description": "Interview transcript from a note-taker (Recall.ai / Fireflies) mapped to form questions; AI independently scores each candidate answer on the same 0-3 scale",
+      "done": false
+    },
+    {
+      "id": "AI-8",
+      "category": "ai",
+      "name": "Divergence report (AI vs interviewer scores)",
+      "description": "Per-question comparison of AI and interviewer scores with rationale; used for interview quality control and interviewer calibration",
+      "done": false
+    },
+    {
+      "id": "AI-3",
+      "category": "ai",
+      "name": "AI interview summary",
+      "description": "Auto-generated candidate summary from scores, comments and feedback for report and CRM note",
+      "done": false
+    },
+    {
+      "id": "AI-4",
+      "category": "ai",
+      "name": "Candidate interview memory",
+      "description": "Persistent history of all interviews per candidate with embeddings (pgvector); avoid repeated questions, surface past strengths/weaknesses",
+      "done": false
+    },
+    {
+      "id": "AI-5",
+      "category": "ai",
+      "name": "Recruitment analytics",
+      "description": "Funnel metrics, time-to-hire, pass rates by vacancy/tech stack/interviewer, question difficulty calibration",
+      "done": false
+    },
+    {
+      "id": "AI-6",
+      "category": "ai",
+      "name": "HR analytics",
+      "description": "Interviewer load and consistency, hiring quality tracking, panel diversity, dashboards for hiring managers",
+      "done": false
+    },
+    {
+      "id": "LD-1",
+      "category": "learning-development",
+      "name": "L&D foundation",
+      "description": "Reuse question bank and scoring engine for internal skill assessments, competency matrices, growth plans and re-evaluation cycles",
+      "done": false
+    },
+    {
+      "id": "FN-1",
+      "category": "functional",
+      "name": "Email / in-app notifications",
+      "description": "Interview reminders, approval requests, feedback deadline notifications (TODO already noted in tasks.py)",
+      "done": false
+    },
+    {
+      "id": "FN-2",
+      "category": "functional",
+      "name": "Calendar integration",
+      "description": "Google/Outlook calendar events for scheduled interviews with conflict detection",
+      "done": false
+    },
+    {
+      "id": "FN-3",
+      "category": "functional",
+      "name": "PDF report export",
+      "description": "PDF version of the evaluation report alongside HTML; secure signed URLs instead of public media links",
+      "done": false
+    },
+    {
+      "id": "FN-4",
+      "category": "functional",
+      "name": "Audit log",
+      "description": "Structured audit trail of form changes, votes, approvals and score edits",
+      "done": false
+    },
+    {
+      "id": "ARCH-1",
+      "category": "architecture",
+      "name": "Environment-split settings and hardening",
+      "description": "settings/base|dev|prod, ALLOWED_HOSTS/CORS from env, S3-compatible media storage, Sentry, structured logging",
+      "done": false
+    },
+    {
+      "id": "ARCH-2",
+      "category": "architecture",
+      "name": "API versioning and response caching",
+      "description": "/api/v1/ namespace, Redis caching for reference data, ETag support",
+      "done": false
+    },
+    {
+      "id": "FE-1",
+      "category": "frontend",
+      "name": "SPA frontend",
+      "description": "React/Next.js client: template builder, live working-form collaboration UI, evaluation cockpit, analytics dashboards",
+      "done": false
+    }
+  ]
+}

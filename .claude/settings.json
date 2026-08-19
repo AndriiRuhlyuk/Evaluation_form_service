@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "defaultMode": "default",
+    "allow": [
+      "Bash(python manage.py test *)",
+      "Bash(python manage.py makemigrations *)",
+      "Bash(python manage.py check *)",
+      "Bash(python manage.py showmigrations *)",
+      "Bash(flake8 *)",
+      "Bash(black *)",
+      "Bash(git diff *)",
+      "Bash(git status *)",
+      "Bash(git log *)"
+    ],
+    "ask": [
+      "Bash(python manage.py migrate *)",
+      "Bash(docker-compose down *)",
+      "Edit(**/migrations/*.py)",
+      "Edit(**/migrations/**/*.py)"
+    ],
+    "deny": [
+      "Bash(git push *)",
+      "Bash(rm -rf *)",
+      "Bash(git clean *)",
+      "Bash(git checkout -- *)",
+      "Bash(git restore *)",
+      "Bash(python manage.py flush *)",
+      "Bash(python manage.py sqlflush *)",
+      "Bash(dropdb *)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)"
+    ]
+  },
+  "env": {
+    "BASH_DEFAULT_TIMEOUT_MS": "300000",
+    "BASH_MAX_TIMEOUT_MS": "600000",
+    "PYTHONUNBUFFERED": "1",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "CLAUDE_CODE_NEW_INIT": "1"
+  },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": false,
+    "filesystem": {
+      "allowRead": [
+        ".env.sample"
+      ]
+    },
+    "network": {
+      "allowedDomains": [
+        "pypi.org",
+        "files.pythonhosted.org"
+      ],
+      "allowLocalBinding": true
+    }
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/guard-migrations.sh",
+            "statusMessage": "перевірка міграцій"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(python manage.py makemigrations*)",
+            "command": "bash .claude/hooks/check-new-migrations.sh",
+            "statusMessage": "аналіз нових міграцій"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_response.filePath // .tool_input.file_path' | { read -r f; case \"$f\" in *.py) .venv/bin/black -q \"$f\";; esac; } 2>/dev/null || true",
+            "statusMessage": "black"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/check-layout-drift.sh PostToolUse",
+            "statusMessage": "звірка структури проєкту"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/check-layout-drift.sh SessionStart",
+            "statusMessage": "звірка структури проєкту"
+          }
+        ]
+      }
+    ],
+    "InstructionsLoaded": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -c '{ts: (now|todate), sid: .session_id[0:8], file: .file_path, type: .memory_type, reason: .load_reason, trigger: .trigger_file_path, globs: .globs}' >> .claude/instructions.log 2>/dev/null || true",
+            "statusMessage": "лог інструкцій"
+          }
+        ]
+      }
+    ]
+  },
+  "companyAnnouncements": [
+    "Перед комітом: flake8 && black . && python manage.py test"
+  ],
+  "plansDirectory": "docs/plans"
+}

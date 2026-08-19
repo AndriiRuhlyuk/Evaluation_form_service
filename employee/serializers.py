@@ -27,8 +27,6 @@ class EmployeeSerializer(serializers.ModelSerializer):
             "fullname",
             "role",
             "level",
-            "project",
-            "tech_stack",
             "is_active",
             "updated_at",
         )
@@ -82,12 +80,12 @@ class LogoutSerializer(serializers.Serializer):
 
             token.verify()
 
-        except TokenError as e:
+        except TokenError:
             raise ValidationError("Invalid or expired refresh token")
         except (ValueError, TypeError):
 
             raise ValidationError("Invalid token format")
-        except Exception as e:
+        except Exception:
             raise ValidationError("Token validation failed")
 
         return value
