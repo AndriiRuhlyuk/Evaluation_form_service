@@ -6,8 +6,9 @@
 # Робить три речі по черзі:
 #   1. прогін тестів - має бути зелено на незміненому коді;
 #   2. покриття цільового файлу через coverage.py, якщо він встановлений;
-#   3. мутаційну перевірку - по черзі псує рядки `return` у цільовому файлі
-#      і дивиться, чи тести це помічають.
+#   3. мутаційну перевірку - по черзі псує конструкції у цільовому файлі
+#      і дивиться, чи тести це помічають. Кандидатів шукає mutate.py через
+#      синтаксичне дерево, тому мутуються і багаторядкові вирази, і порівняння.
 #
 # Мутація, яку тести НЕ помітили ("вижила"), означає прогалину в покритті:
 # рядок можна зламати, і жоден тест не почервоніє.
@@ -73,58 +74,75 @@ cp "$TARGET" "$BACKUP"
 # Відновлюємо файл за будь-якого виходу: успіх, помилка, Ctrl+C
 trap 'cp "$BACKUP" "$TARGET"; rm -f "$BACKUP" "$BASE_LOG"' EXIT INT TERM
 
-# Рядки виду `return <щось>` - саме вони несуть поведінку.
-# `return` без значення і `return None` пропускаємо: псувати там нічого.
-# Читаємо у масив без mapfile: він з'явився лише в bash 4, а /bin/bash на macOS - 3.2
-LINES=()
-while IFS= read -r ln; do
-    LINES+=("$ln")
-done < <(grep -n '^[[:space:]]*return [^N]' "$TARGET" | cut -d: -f1 | head -n "$MAX_MUTATIONS")
+# Кандидатів шукає mutate.py через синтаксичне дерево: воно знає точні межі
+# конструкції, тому багаторядковий `return (` замінюється цілком і файл лишається
+# валідним Python. Пошук за шаблоном рядка цього не вміє.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+MUTATOR="$SCRIPT_DIR/mutate.py"
 
-if [[ ${#LINES[@]} -eq 0 ]]; then
-    echo "У $TARGET немає рядків return зі значенням - мутувати нічого."
+if [[ ! -f "$MUTATOR" ]]; then
+    echo "Немає $MUTATOR - мутаційна перевірка неможлива."
+    exit 1
+fi
+
+# Якщо кандидатів більше за ліміт, беремо їх рівномірно по файлу, а не перші
+# поспіль: інакше перевіримо лише початок модуля і не дізнаємось нічого про решту.
+# Читаємо у масив без mapfile - він з'явився в bash 4, а /bin/bash на macOS це 3.2.
+CANDIDATES=()
+while IFS= read -r row; do
+    CANDIDATES+=("$row")
+done < <(python3 "$MUTATOR" list "$TARGET" | awk -v max="$MAX_MUTATIONS" '
+    {rows[NR] = $0}
+    END {
+        step = (NR > max) ? NR / max : 1
+        for (i = 1; i <= NR; i += step) print rows[int(i)]
+    }')
+
+if [[ ${#CANDIDATES[@]} -eq 0 ]]; then
+    echo "У $TARGET немає придатних конструкцій - мутувати нічого."
     exit 0
 fi
 
+TOTAL_FOUND=$(python3 "$MUTATOR" list "$TARGET" | wc -l | tr -d ' ')
+echo "Кандидатів у файлі: $TOTAL_FOUND, перевіряємо: ${#CANDIDATES[@]}"
+
 SURVIVED=()
 SKIPPED=0
-for LINE in "${LINES[@]}"; do
-    python3 - "$TARGET" "$LINE" <<'PY'
-import sys
-path, line_no = sys.argv[1], int(sys.argv[2])
-lines = open(path).readlines()
-original = lines[line_no - 1]
-indent = original[: len(original) - len(original.lstrip())]
-lines[line_no - 1] = f"{indent}return None  # mutation\n"
-open(path, "w").writelines(lines)
-PY
+for ROW in "${CANDIDATES[@]}"; do
+    # рядок має вигляд: <індекс>|<вид>|<рядок>|<фрагмент коду>
+    IDX="${ROW%%|*}"
+    REST="${ROW#*|}"
+    KIND="${REST%%|*}"
+    REST="${REST#*|}"
+    LINE="${REST%%|*}"
+    LABEL="${REST#*|}"
 
-    CODE_SNIPPET=$(sed -n "${LINE}p" "$BACKUP" | sed 's/^[[:space:]]*//' | cut -c1-50)
+    python3 "$MUTATOR" apply "$TARGET" "$IDX"
 
-    # Багаторядковий вираз (`return (`) після заміни лишає хвіст без початку,
-    # і файл перестає бути валідним Python. Тести тоді впадуть на SyntaxError,
-    # а не на поведінці - це хибне "спіймано". Такі мутації пропускаємо.
+    # Запобіжник. AST має гарантувати валідність, тож спрацювання тут означає
+    # помилку мутатора, а не сигнал про якість тестів - і мовчки зарахувати
+    # таку мутацію як "спіймано" було б обманом.
     if ! python3 -m py_compile "$TARGET" 2>/dev/null; then
-        echo "  пропущено рядок $LINE (багаторядковий): $CODE_SNIPPET"
+        echo "  ПРОПУЩЕНО $KIND, рядок $LINE (мутація зламала синтаксис): $LABEL"
         SKIPPED=$((SKIPPED + 1))
         cp "$BACKUP" "$TARGET"
         continue
     fi
 
     if $RUN_TESTS >/dev/null 2>&1; then
-        echo "  ВИЖИЛА  рядок $LINE: $CODE_SNIPPET"
-        SURVIVED+=("$LINE: $CODE_SNIPPET")
+        echo "  ВИЖИЛА  $KIND, рядок $LINE: $LABEL"
+        SURVIVED+=("$KIND, рядок $LINE: $LABEL")
     else
-        echo "  спіймано рядок $LINE: $CODE_SNIPPET"
+        echo "  спіймано $KIND, рядок $LINE: $LABEL"
     fi
     cp "$BACKUP" "$TARGET"
 done
 
 echo
-TESTED=$((${#LINES[@]} - SKIPPED))
+TESTED=$((${#CANDIDATES[@]} - SKIPPED))
 if [[ $TESTED -eq 0 ]]; then
-    echo "Жодної придатної мутації: усі $SKIPPED кандидатів багаторядкові."
-    echo "Візьми інший цільовий файл або підніми MAX_MUTATIONS."
+    echo "Жодної придатної мутації - усі $SKIPPED зламали синтаксис."
+    echo "Це помилка мутатора: повідом про файл, на якому це сталося."
 elif [[ ${#SURVIVED[@]} -eq 0 ]]; then
     echo "Усі $TESTED мутації спіймані - тести справді перевіряють цей код."
 else
