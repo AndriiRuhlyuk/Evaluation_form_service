@@ -13,6 +13,12 @@ Test files with assertions:
 
 - `topic/tests/tests_topics.py`
 - `techstack/tests/tests_techstacks.py`
+- `question/tests/tests_questions.py` - the whole `QuestionViewSet` contract: author stamped
+  by `perform_create`, `is_active` soft delete (second DELETE returns **204**, not 404, and
+  a deleted question is hidden from `list` yet still retrievable by pk), the `restore`
+  action including its 400-on-already-active branch, `?is_active=false`, and the fact that
+  `IsEmployee` is declared in `permission_classes` but never reached because
+  `get_permissions()` is overridden
 - `template_form/tests.py`, `working_form/tests.py`, `evaluation_form/tests.py` - soft
   delete of the three form stages only (destroy endpoints, slug reservation, admin restore,
   the celery status task, destroy permissions)
