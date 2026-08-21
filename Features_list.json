@@ -361,6 +361,27 @@
       "name": "SPA frontend",
       "description": "React/Next.js client: template builder, live working-form collaboration UI, evaluation cockpit, analytics dashboards",
       "done": false
+    },
+    {
+      "id": "ARCH-3",
+      "category": "architecture",
+      "name": "Deterministic gates via Claude Code hooks",
+      "description": "PreToolUse exit-2 gates: .env/key-file write protection plus secret-shaped literal scan (protect-secrets.py), and services.py-must-not-broadcast layering guard wired by matcher + if (guard-layering.py). SessionStart matcher=compact re-injects repo state and invariants; async SessionEnd writes per-session counters to .claude/telemetry.jsonl. Quality gate lives in .githooks/pre-commit (black on staged, flake8 repo-wide, tests with graceful skip when Postgres is down), enabled by core.hooksPath. PASS/FAIL matrix: .claude/hooks/test-hooks.sh",
+      "done": true
+    },
+    {
+      "id": "ARCH-4",
+      "category": "architecture",
+      "name": "template_form/services.py leaks the API layer",
+      "description": "Found while scoping ARCH-3: template_form/services.py imports rest_framework.serializers and django.http.JsonResponse, and evaluation_form/services.py imports rest_framework.exceptions. A service returning an HTTP response cannot be reused off the request path (Celery task, management command). This is why guard-layering.py only enforces the broadcast rule - a no-DRF-in-services gate would be red on day one and get switched off. Clean these up first, then extend the hook.",
+      "done": false
+    },
+    {
+      "id": "ARCH-5",
+      "category": "architecture",
+      "name": "Pre-commit gate cannot run tests locally",
+      "description": "Found while building ARCH-3: .githooks/pre-commit probes Postgres and skips the test stage when it is unreachable, so a commit made with docker-compose down is lint-checked only. Options: a sqlite settings profile for the gate, or a testcontainers-style ephemeral Postgres. Until then the commit-time guarantee is weaker than main-always-green.",
+      "done": false
     }
   ]
 }

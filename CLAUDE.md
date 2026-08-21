@@ -53,7 +53,8 @@ evaluation_form_service/
 ├── templates/reports/         # evaluation_report.html - rendered by generate_html_report()
 ├── fixtures/                  # initial_data.json
 ├── docs/orchestration/        # per-feature plans (Ukrainian)
-└── .claude/                   # rules/ by layer (api, data, domain, infra, integrations) + hooks/ + skills/scaffold-tests (scripts, references, templates)
+├── .githooks/                 # one quality gate before every commit: black on staged, flake8 repo-wide, tests when Postgres answers; wired by `git config core.hooksPath .githooks`
+└── .claude/                   # rules/ by layer (api, data, domain, infra, integrations) + hooks/ (gates + their PASS/FAIL matrix) + skills/scaffold-tests (scripts, references, templates)
 ```
 
 `check-layout-drift.sh` verifies this tree against the real structure. Indentation is a
@@ -62,12 +63,21 @@ the script itself.
 
 ## Commands
 
-Tooling lives in `.venv/`. Activate it or prefix with `.venv/bin/`. Five hooks in
-`.claude/settings.json` act on you: `black` on every `.py` written; a permission prompt on any
-migration-touching command or `git clean`; a destructive-operation report on a new migration;
-an `InstructionsLoaded` logger (see Path-specific Rules); and `check-layout-drift.sh` - when it
-speaks, fix **Project Layout** and **write the comment**, an unannotated path being worse than
-no line at all.
+Tooling lives in `.venv/`. Activate it or prefix with `.venv/bin/`. Hooks in
+`.claude/settings.json` act on you. Three **block** you with exit 2, and the stderr text tells
+you what to do instead: writing to `.env` or any key file, writing a secret-shaped literal into
+a tracked file, and putting `group_send`/`channel_layer` into a `services.py`. The rest are
+non-blocking: `black` on every `.py` written; a permission prompt on any migration-touching
+command or `git clean`; a destructive-operation report on a new migration; an
+`InstructionsLoaded` logger (see Path-specific Rules); a `matcher: compact` hook that re-prints
+repo state and invariants into context after `/compact`; an `async` `SessionEnd` counter into
+`.claude/telemetry.jsonl`; and `check-layout-drift.sh` - when it speaks, fix **Project Layout**
+and **write the comment**, an unannotated path being worse than no line at all.
+
+Quality gates live in `.githooks/pre-commit`, **not** in `PostToolUse` - running tests after
+every edit would spend ten red intermediate states on one plan and push Claude into a
+micro-fix loop. `bash .claude/hooks/test-hooks.sh` re-runs the PASS/FAIL matrix for every hook;
+run it after touching any of them, since a mis-wired gate fails silently.
 
 ```bash
 docker-compose up --build      # Postgres, Redis, Daphne :8000, Celery worker/beat, Flower :5555
