@@ -358,6 +358,8 @@ pyrightconfig.json
 .claude/settings.local.json
 # InstructionsLoaded hook output - machine-local, one JSON line per rule load
 .claude/instructions.log
+# SessionEnd hook output - per-session counters, machine-local like the log above
+.claude/telemetry.jsonl
 
 # local DB dumps
 backup_before_migrations.sql

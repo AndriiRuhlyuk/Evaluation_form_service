@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# git pre-commit: єдиний quality gate проєкту - black, flake8, тести.
+#
+# Навіщо git-хук, а не PostToolUse: PostToolUse на тести спрацював би після
+# КОЖНОГО Edit. Десять правок у межах одного плану - десять прогонів на
+# проміжному стані, дев'ять з яких червоні по дорозі, і весь цей шум іде в
+# контекст. Claude кидає план і лізе в micro-fix loop лагодити те, що і так
+# мало полагодитись наступною правкою. Pre-commit дає рівно один сигнал на
+# фінальному стані: один фідбек - одна реакція - один коміт.
+#
+# Асиметрія, на якій це тримається: людині 30-180 секунд очікування на коміті
+# болять, і вона шукає --no-verify. Агенту байдуже - він не втомлюється і не
+# сперечається. Той самий гейт, який люди вимикають, для агента працює.
+#
+# Лежить у .githooks/, а не в .git/hooks/, бо .git/hooks не трекається git:
+# гейт має версіонуватись разом із кодом, який стереже.
+# Вмикається один раз: git config core.hooksPath .githooks
+set -uo pipefail
+
+PY=.venv/bin/python
+BLACK=.venv/bin/black
+FLAKE8=.venv/bin/flake8
+
+red() { printf '\033[31m%s\033[0m\n' "$1" >&2; }
+green() { printf '\033[32m%s\033[0m\n' "$1"; }
+yellow() { printf '\033[33m%s\033[0m\n' "$1" >&2; }
+
+fail() {
+  red "PRE-COMMIT FAILED: $1"
+  [ -n "${2:-}" ] && red "  -> $2"
+  exit 1
+}
+
+if [ ! -x "$PY" ]; then
+  fail ".venv не знайдено" "створи оточення або зніми core.hooksPath"
+fi
+
+# Тільки .py, які реально йдуть у коміт. Фільтр ACMR відкидає видалені файли -
+# інакше black спіткнеться об шлях, якого вже немає на диску.
+# Читаємо циклом, а не через mapfile: mapfile з'явився у bash 4, а стоковий
+# macOS досі везе /bin/bash 3.2 - гейт має працювати і там.
+staged=()
+while IFS= read -r path; do
+  [ -n "$path" ] && staged+=("$path")
+done < <(git diff --cached --name-only --diff-filter=ACMR -- '*.py')
+
+# --- 1. Формат ------------------------------------------------------------
+# Перевіряємо ЛИШЕ staged-файли: black --check по всьому репо звинуватив би
+# коміт у чужому форматуванні, до якого автор не дотикався.
+if [ ${#staged[@]} -gt 0 ]; then
+  if ! "$BLACK" --check --quiet "${staged[@]}" 2>/dev/null; then
+    "$BLACK" --check --diff "${staged[@]}" 2>&1 | head -40 >&2
+    fail "black: staged-файли не відформатовані" "black . && git add -u"
+  fi
+  green "black: ok (${#staged[@]} файл(ів))"
+else
+  green "black: пропущено, .py у staged немає"
+fi
+
+# --- 2. Лінтер ------------------------------------------------------------
+# Тут навпаки - по всьому репо. CLAUDE.md фіксує baseline "zero findings",
+# тож будь-який вивід означає регресію, навіть у файлі поза staged: імпорт,
+# що зламався від перейменування в іншому місці, інакше просочиться.
+flake8_out=$("$FLAKE8" 2>&1)
+if [ -n "$flake8_out" ]; then
+  printf '%s\n' "$flake8_out" | head -30 >&2
+  fail "flake8: $(printf '%s\n' "$flake8_out" | wc -l | tr -d ' ') знахідок" \
+    "baseline цього репо - нуль"
+fi
+green "flake8: чисто"
+
+# --- 3. Тести -------------------------------------------------------------
+# Проба з'єднання окремо від тестів: інакше "БД не піднята" і "тест упав"
+# віддають однаковий ненульовий код, і гейт блокує коміт за відсутню
+# інфраструктуру. Значення з .env читає сам Django через load_dotenv і
+# нікуди їх не друкує.
+db_reachable() {
+  timeout 15 "$PY" - <<'PROBE' >/dev/null 2>&1
+import os
+import sys
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "evaluation_form_service.settings")
+import django
+
+django.setup()
+from django.db import connection
+
+try:
+    connection.ensure_connection()
+except Exception:
+    sys.exit(1)
+PROBE
+}
+
+if db_reachable; then
+  if ! "$PY" manage.py test --verbosity=1 2>&1 | tail -25; then
+    fail "тести червоні" "полагодь або зніми зміни зі staged"
+  fi
+  green "тести: ok"
+else
+  yellow "тести: ПРОПУЩЕНО - Postgres недоступний (docker-compose up -d db)"
+  yellow "  lint-частина гейта відпрацювала; тести проженіть перед push"
+fi
+
+green "PRE-COMMIT PASSED"
+exit 0
