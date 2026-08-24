@@ -49,6 +49,17 @@ reconciliation. `domain/realtime.md` co-loads on this file and carries the event
 
 JWT-only authentication, `PageNumberPagination` with page size 5, throttling anon 100/day and
 user 300/day - all from `REST_FRAMEWORK` in `settings.py`, so a viewset that sets none of them
-already behaves correctly. OpenAPI is served at `/api/schema/`, `/api/doc/swagger/` and
+already behaves correctly.
+
+**A paginated list needs an ORDER BY, and `Meta.ordering` alone may not give you one.** All
+three form models order themselves, but both form list endpoints `annotate()` with `Count()`,
+which adds a GROUP BY - and Django ignores `Meta.ordering` in a grouped query, so
+`QuerySet.ordered` goes `False` and pagination silently returns rows in query-plan order.
+The two viewsets fix it differently because they are built differently:
+`TemplateFormViewSet` has `filters.OrderingFilter`, so it declares an `ordering` default;
+`WorkingFormViewSet` has no `filter_backends` at all, so it calls `.order_by()` explicitly
+after the annotate. Adding an aggregate annotate to a list action puts you back in this hole -
+the signal is `UnorderedObjectListWarning` on stderr, and a green test run will not raise it
+for you (BUG-6). OpenAPI is served at `/api/schema/`, `/api/doc/swagger/` and
 `/api/doc/redoc/` by drf-spectacular; a new action with no `@extend_schema` still appears
 there, with an inferred and usually wrong response body.

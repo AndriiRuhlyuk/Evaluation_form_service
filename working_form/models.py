@@ -324,6 +324,9 @@ class WorkingForm(BaseForm):
     class Meta:
         verbose_name = "Working form"
         verbose_name_plural = "Working forms"
+        # Цей Meta не наслідує BaseForm.Meta, тому ordering тут потрібен свій -
+        # інакше модель лишилася б без сортування, а решта пайплайну з ним.
+        ordering = ["-created_at", "-pk"]
 
 
 class WorkingFormTopicQuerySet(models.QuerySet):

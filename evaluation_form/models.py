@@ -133,7 +133,10 @@ class EvaluationForm(BaseForm):
     # Meta class for model configuration
     class Meta:
         # Orders evaluation forms by interview date (newest first), e.g., [EvaluationForm(interview_datetime="2023-05-20"), EvaluationForm(interview_datetime="2023-05-15")]
-        ordering = ["-interview_datetime"]
+        # -pk доданий як тайбрейкер: кілька кандидатів на один слот інтерв'ю -
+        # звичайна ситуація, а однакове interview_datetime лишає їхній взаємний
+        # порядок недетермінованим між сторінками пагінації.
+        ordering = ["-interview_datetime", "-pk"]
 
     def save(self, *args, **kwargs) -> None:
         """

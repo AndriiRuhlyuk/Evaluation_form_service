@@ -237,6 +237,12 @@ class TemplateForm(BaseForm):
         null=True, blank=True, help_text="When draft was last updated"
     )
 
+    class Meta:
+        # -pk, бо created_at це auto_now_add: клонування створює пачку форм з
+        # однаковою міткою, і без унікального тайбрейкера порядок у межах пачки
+        # лишається на розсуд планувальника запитів.
+        ordering = ["-created_at", "-pk"]
+
     def __str__(self):
         """
         String representation of the TemplateForm, indicating draft status.

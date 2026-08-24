@@ -167,3 +167,20 @@ class EvaluationFormSoftDeleteTests(APITestCase):
         self.client.force_authenticate(self.recruiter)
         response = self.client.get(self._url(form))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+class EvaluationFormOrderingTests(APITestCase):
+    """
+    BUG-6, the EvaluationForm half - and deliberately a smaller test than the
+    other two apps get.
+
+    This model already ordered by -interview_datetime, so DRF never warned and
+    there is no behavioural failure to reproduce: the defect is that the sort
+    key is not unique, and rows sharing an interview slot fall back to whatever
+    the query plan returns. A test asserting "ties come back in pk order" would
+    pass before the fix on any small table, which proves nothing. So this is an
+    explicit contract assertion instead, and it is honest about being one.
+    """
+
+    def test_meta_ordering_keeps_a_unique_tiebreaker(self):
+        self.assertEqual(EvaluationForm._meta.ordering, ["-interview_datetime", "-pk"])
