@@ -54,6 +54,7 @@ evaluation_form_service/
 ├── fixtures/                  # initial_data.json
 ├── docs/orchestration/        # per-feature plans (Ukrainian)
 ├── .githooks/                 # one quality gate before every commit: black on staged, flake8 repo-wide, tests when Postgres answers; wired by `git config core.hooksPath .githooks`
+├── django-guardrails/         # the same gates repackaged as a portable Claude Code plugin: manifest in .claude-plugin/, components at root, every path rebuilt on ${CLAUDE_PLUGIN_ROOT}; runs standalone via `claude --plugin-dir ./django-guardrails`
 └── .claude/                   # rules/ by layer (api, data, domain, infra, integrations) + hooks/ (gates + their PASS/FAIL matrix) + skills/scaffold-tests (scripts, references, templates)
 ```
 

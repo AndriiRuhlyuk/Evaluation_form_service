@@ -1,0 +1,59 @@
+{
+  "description": "Django/DRF quality gates: secrets, migrations, layering, formatting.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}\"/hooks/guard-migrations.sh",
+            "statusMessage": "перевірка міграцій",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}\"/hooks/protect-secrets.py",
+            "statusMessage": "захист .env і скан секретів",
+            "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}\"/hooks/guard-layering.py",
+            "statusMessage": "шар: services без broadcast",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}\"/hooks/check-new-migrations.sh",
+            "statusMessage": "аналіз нових міграцій",
+            "timeout": 20
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}\"/hooks/format-python.sh",
+            "statusMessage": "black",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
