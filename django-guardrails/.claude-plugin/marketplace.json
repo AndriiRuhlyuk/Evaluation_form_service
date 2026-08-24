@@ -1,0 +1,15 @@
+{
+  "name": "django-guardrails-dev",
+  "description": "Local development marketplace carrying a single plugin: the Django/DRF quality gates of this repository.",
+  "owner": {
+    "name": "Andrii Rykhliuk",
+    "url": "https://github.com/AndriiRuhlyuk"
+  },
+  "plugins": [
+    {
+      "name": "django-guardrails",
+      "source": "./",
+      "description": "Deterministic quality gates for Django/DRF repos: secrets, migrations, layering, formatting, and tests proven by mutation."
+    }
+  ]
+}
