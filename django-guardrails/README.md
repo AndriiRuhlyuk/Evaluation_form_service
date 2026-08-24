@@ -32,16 +32,21 @@
 claude --plugin-dir ./django-guardrails
 ```
 
-Постійне встановлення на весь репозиторій, з комітом у `.claude/settings.json`. `install`
-резолвить плагін через marketplace, тому спершу треба зареєструвати той, що лежить у самому
-плагіні (`.claude-plugin/marketplace.json`):
+Постійне встановлення нічого робити не вимагає, якщо ти працюєш усередині цього
+репозиторію: `.claude/settings.json` уже містить `extraKnownMarketplaces` і `enabledPlugins`,
+тому плагін піднімається сам, щойно ти довіриш теку репозиторію.
+
+З іншого проєкту плагін ставиться через marketplace, який роздається разом із репозиторієм.
+`install` резолвить плагін тільки через marketplace, тому спершу треба зареєструвати індекс,
+і його маніфест лежить **у корені репо**, а не всередині плагіна:
 
 ```bash
-claude plugin marketplace add ./django-guardrails
-claude plugin install django-guardrails@django-guardrails-dev --scope project
+claude plugin marketplace add AndriiRuhlyuk/Evaluation_form_service
+claude plugin install django-guardrails@evaluation-form-service --scope project
 ```
 
 Без `--scope project` запис піде у твій `~/.claude/` і колеги плагіна не побачать.
+Локальна перевірка без реєстрації індексу робиться через `--plugin-dir`, як вище.
 
 Залежності на машині: `bash`, `jq`, `python3` (хуки на stdlib, без пакетів), `git`.
 Скрипти skill (`preflight.py`, `mutate.py`) мають shebang `uv run`, але викликаються завжди

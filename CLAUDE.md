@@ -54,8 +54,9 @@ evaluation_form_service/
 ├── fixtures/                  # initial_data.json
 ├── docs/orchestration/        # per-feature plans (Ukrainian)
 ├── .githooks/                 # one quality gate before every commit: black on staged, flake8 repo-wide, tests when Postgres answers; wired by `git config core.hooksPath .githooks`
-├── django-guardrails/         # the same gates repackaged as a portable Claude Code plugin: manifest in .claude-plugin/, components at root, every path rebuilt on ${CLAUDE_PLUGIN_ROOT}; runs standalone via `claude --plugin-dir ./django-guardrails`
-└── .claude/                   # rules/ by layer (api, data, domain, infra, integrations) + hooks/ (gates + their PASS/FAIL matrix) + skills/scaffold-tests (scripts, references, templates)
+├── .claude-plugin/            # marketplace manifest naming django-guardrails; registration is manual and per-machine (`claude plugin marketplace add ./`) - a fresh clone resolves nothing on its own
+├── django-guardrails/         # every portable gate, as an installed Claude Code plugin: manifest in .claude-plugin/, components at root, paths rebuilt on ${CLAUDE_PLUGIN_ROOT}; also runs standalone via `claude --plugin-dir ./django-guardrails`
+└── .claude/                   # rules/ by layer (api, data, domain, infra, integrations) + hooks/ (only the three that know about *this* repo)
 ```
 
 `check-layout-drift.sh` verifies this tree against the real structure. Indentation is a
@@ -64,21 +65,25 @@ the script itself.
 
 ## Commands
 
-Tooling lives in `.venv/`. Activate it or prefix with `.venv/bin/`. Hooks in
-`.claude/settings.json` act on you. Three **block** you with exit 2, and the stderr text tells
-you what to do instead: writing to `.env` or any key file, writing a secret-shaped literal into
-a tracked file, and putting `group_send`/`channel_layer` into a `services.py`. The rest are
-non-blocking: `black` on every `.py` written; a permission prompt on any migration-touching
-command or `git clean`; a destructive-operation report on a new migration; an
-`InstructionsLoaded` logger (see Path-specific Rules); a `matcher: compact` hook that re-prints
-repo state and invariants into context after `/compact`; an `async` `SessionEnd` counter into
+Tooling lives in `.venv/`. Activate it or prefix with `.venv/bin/`. Two hook sources act on you.
+The **plugin** holds every gate that would hold in any Django repo; three **block** with exit 2,
+and the stderr says what to do instead: writing to `.env` or any key file, a secret-shaped
+literal into a tracked file, `group_send`/`channel_layer` into a `services.py`. Non-blocking
+there: `black` on each `.py` written, a prompt on any migration-touching command or `git clean`,
+a destructive-operation report on a new migration. It installs at **local** scope, declared in
+`.claude/settings.local.json` - per machine, so a fresh clone has **no gates at all** until
+someone installs it. `.claude/settings.json` keeps only what is true of *this* repo: an
+`InstructionsLoaded` logger (see Path-specific Rules); a `matcher: compact` hook re-printing
+repo state and invariants after `/compact`; an `async` `SessionEnd` counter into
 `.claude/telemetry.jsonl`; and `check-layout-drift.sh` - when it speaks, fix **Project Layout**
 and **write the comment**, an unannotated path being worse than no line at all.
 
 Quality gates live in `.githooks/pre-commit`, **not** in `PostToolUse` - running tests after
 every edit would spend ten red intermediate states on one plan and push Claude into a
-micro-fix loop. `bash .claude/hooks/test-hooks.sh` re-runs the PASS/FAIL matrix for every hook;
-run it after touching any of them, since a mis-wired gate fails silently.
+micro-fix loop. `/django-guardrails:hooks-matrix` re-runs the PASS/FAIL matrix for every plugin
+gate - run it after touching any, since a mis-wired gate fails silently. Editing a hook under
+`django-guardrails/` changes nothing until `claude plugin marketplace update
+evaluation-form-service`: the install is a copy, not a link to the worktree.
 
 ```bash
 docker-compose up --build      # Postgres, Redis, Daphne :8000, Celery worker/beat, Flower :5555

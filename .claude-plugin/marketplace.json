@@ -1,0 +1,15 @@
+{
+  "name": "evaluation-form-service",
+  "description": "Plugins developed inside this repository and distributed together with it.",
+  "owner": {
+    "name": "Andrii Rykhliuk",
+    "url": "https://github.com/AndriiRuhlyuk"
+  },
+  "plugins": [
+    {
+      "name": "django-guardrails",
+      "source": "./django-guardrails",
+      "description": "Deterministic quality gates for Django/DRF repos: blocks writes to .env and secret-shaped literals, asks before shell commands that can destroy migrations, keeps the realtime layer out of services.py, auto-formats with black, and scaffolds tests proven to bite by an AST mutation check."
+    }
+  ]
+}
