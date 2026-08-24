@@ -1,6 +1,6 @@
 {
   "project": "Evaluation Form Service",
-  "updated": "2026-08-19",
+  "updated": "2026-08-24",
   "legend": { "true": "implemented", "false": "planned / backlog" },
   "features": [
     {
@@ -381,6 +381,20 @@
       "category": "architecture",
       "name": "Pre-commit gate cannot run tests locally",
       "description": "Found while building ARCH-3: .githooks/pre-commit probes Postgres and skips the test stage when it is unreachable, so a commit made with docker-compose down is lint-checked only. Options: a sqlite settings profile for the gate, or a testcontainers-style ephemeral Postgres. Until then the commit-time guarantee is weaker than main-always-green.",
+      "done": false
+    },
+    {
+      "id": "BUG-6",
+      "category": "bug",
+      "name": "TemplateForm and WorkingForm paginate without an ordering",
+      "description": "Surfaced as UnorderedObjectListWarning in a full test run (71/71 green, so nothing failed): DRF paginated both list endpoints over an unordered queryset, free to repeat or skip a row between ?page=1 and ?page=2. Fixed in two layers, because one was not enough. Model layer: TemplateForm.Meta (new), WorkingForm.Meta and EvaluationForm.Meta now carry a deterministic ordering with a -pk tiebreaker - created_at is auto_now_add and clone_template_to_working stamps a batch inside one transaction, so equal sort keys are the normal case. View layer: both list endpoints annotate with Count(), which adds a GROUP BY, and Django ignores Meta.ordering in grouped queries (QuerySet.ordered returns False) - so TemplateFormViewSet got an `ordering` default for its OrderingFilter and WorkingFormViewSet, which has no filter_backends, got an explicit .order_by() after the annotate. Three AlterModelOptions migrations, no schema change. Caught by a test asserting the endpoint emits no UnorderedObjectListWarning; the Meta-only fix passed the config assertions and still failed that one.",
+      "done": true
+    },
+    {
+      "id": "BUG-7",
+      "category": "bug",
+      "name": "Nine more models paginate without an ordering",
+      "description": "Found while closing BUG-6, deliberately left out of its scope. Only the three form models were fixed; a sweep over the pipeline apps shows these still have an empty Meta.ordering: TemplateFormTopic, TemplateFormItems, ReadOnlyFormTopic, WorkingFormTopic, WorkingFormItem, Candidate, EvaluationFormTopic, EvaluationFormItem, EvaluationScore, EvaluationFeedback. At least six of them are reachable through a paginated list route (the nested working-form topics/items, template-form items, and the candidates / evaluation-scores / evaluation-feedbacks routes), so they carry the same page-boundary defect. No test paginates them today, which is exactly why the suite stayed silent. The topic and item viewsets also use get_annotated_list(), so the GROUP BY trap from BUG-6 applies there too and a Meta.ordering alone will not be enough. Reference data (Question, Topic, TechStack, Project) is already ordered.",
       "done": false
     }
   ]

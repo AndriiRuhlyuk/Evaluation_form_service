@@ -183,10 +183,19 @@ class WorkingFormViewSet(
 
         if self.action == "list":
 
-            return queryset.prefetch_related(self._get_form_topics_prefetch()).annotate(
-                approvers_count=Count("approvers", distinct=True),
-                approved_by_count=Count("approved_by", distinct=True),
-                interviewer_count=Count("interviewers", distinct=True),
+            # order_by обов'язковий саме тут: annotate() з агрегатами додає
+            # GROUP BY, а Django ігнорує Meta.ordering у групованих запитах
+            # (QuerySet.ordered віддає False), тож пагінація без цього рядка
+            # знову їде на порядку, який обере планувальник. Джерело порядку
+            # лишається одне - Meta моделі.
+            return (
+                queryset.prefetch_related(self._get_form_topics_prefetch())
+                .annotate(
+                    approvers_count=Count("approvers", distinct=True),
+                    approved_by_count=Count("approved_by", distinct=True),
+                    interviewer_count=Count("interviewers", distinct=True),
+                )
+                .order_by(*WorkingForm._meta.ordering)
             )
 
         if self.action in ["approve", "unapprove", "add_topic", "restore_topic"]:

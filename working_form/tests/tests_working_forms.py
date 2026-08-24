@@ -1,5 +1,8 @@
+import warnings
+
 from django.contrib import admin
 from django.contrib.auth import get_user_model
+from django.core.paginator import UnorderedObjectListWarning
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -110,3 +113,54 @@ class WorkingFormSoftDeleteTests(APITestCase):
         self.client.force_authenticate(self.admin)
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+class WorkingFormOrderingTests(APITestCase):
+    """
+    BUG-6, the WorkingForm half. WorkingForm declares its own Meta for the
+    verbose names, so it does NOT inherit BaseForm.Meta - a single ordering
+    on the abstract base would silently miss this model.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = User.objects.create_user(
+            email="ordering-admin@example.com",
+            password="pass",
+            role="MANAGER",
+        )
+        cls.tech_stack = TechStack.objects.create(name="Python")
+        cls.project = Project.objects.create(name="Evaluation Service")
+
+    def setUp(self):
+        self.forms = [
+            WorkingForm.objects.create(
+                name=f"Ordering probe {index}",
+                vacancy="Python Engineer",
+                level=WorkingForm.Level.JUNIOR,
+                project=self.project,
+                tech_stack=self.tech_stack,
+            )
+            for index in range(3)
+        ]
+
+    def test_default_queryset_carries_an_order_by(self):
+        self.assertTrue(WorkingForm.objects.all().ordered)
+
+    def test_list_endpoint_does_not_paginate_an_unordered_queryset(self):
+        self.client.force_authenticate(self.admin)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            response = self.client.get("/api/working-form/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        unordered = [
+            str(entry.message)
+            for entry in caught
+            if issubclass(entry.category, UnorderedObjectListWarning)
+        ]
+        self.assertEqual(unordered, [])
+
+    def test_meta_ordering_is_newest_first_with_a_unique_tiebreaker(self):
+        self.assertEqual(WorkingForm._meta.ordering, ["-created_at", "-pk"])

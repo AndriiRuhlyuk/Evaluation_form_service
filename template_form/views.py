@@ -117,6 +117,13 @@ class TemplateFormViewSet(viewsets.ModelViewSet):
     # Example: ?ordering=created_at or ?ordering=-created_at (descending)
     ordering_fields = ["created_at"]
 
+    # Дефолт для OrderingFilter, коли клієнт не передав ?ordering=.
+    # Потрібен попри Meta.ordering: annotate() вище додає GROUP BY, а в
+    # згрупованому запиті Django ігнорує сортування з Meta, і пагінація
+    # лишається без ORDER BY. Значення дублює Meta моделі свідомо -
+    # OrderingFilter приймає лише статичний список.
+    ordering = ["-created_at", "-pk"]
+
     # Field to use for object lookup instead of pk
     # Example: /api/template-form/java-developer-interview/ (uses slug="java-developer-interview")
     lookup_field = "slug"
