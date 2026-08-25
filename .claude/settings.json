@@ -34,10 +34,7 @@
       "Read(**/*.key)"
     ],
     "ask": [
-      "Bash(python manage.py migrate *)",
-      "Bash(docker-compose down *)",
-      "Edit(**/migrations/*.py)",
-      "Edit(**/migrations/**/*.py)"
+      "Bash(python manage.py migrate *)"
     ],
     "defaultMode": "default"
   },

@@ -64,11 +64,22 @@ the script itself.
 ## Commands
 
 Tooling lives in `.venv/`. Activate it or prefix with `.venv/bin/`. Two hook sources act on you.
-The **plugin** holds every gate that would hold in any Django repo; three **block** with exit 2,
+The **plugin** holds every gate that would hold in any Django repo; five **block** with exit 2,
 and the stderr says what to do instead: writing to `.env` or any key file, a secret-shaped
-literal into a tracked file, `group_send`/`channel_layer` into a `services.py`. Non-blocking
-there: `black` on each `.py` written, a prompt on any migration-touching command or `git clean`,
-a destructive-operation report on a new migration. It no longer lives here: it is published as
+literal into a tracked file, `group_send`/`channel_layer` into a `services.py`, editing a
+migration **git already tracks**, and any shell command that would destroy migrations. That last
+one stopped being a function of the command string: besides `git clean` in any form,
+`docker-compose down -v`, and `rm`/`mv`/`tee`/`cp`/`find -delete`/redirection/`shutil.rmtree`
+aimed at a path under `migrations/`, it reads three more sources - the **filesystem** (`rm -rf
+working_form/` names no migration, so each path token is checked on disk for a `migrations`
+directory), **git aliases** (`git cl` is expanded from `git config`), and the **contents** of a
+script run by path (`bash deploy.sh`, comment lines stripped). Blocked means blocked: you cannot
+wave it through from the session, so deleting a migration or editing a committed one on purpose
+is something you run yourself in the terminal - and for a committed one the right move is
+usually a new migration, not an edit. Only a **prompt**, deliberately: `git reset --hard`,
+`git checkout .`, `git restore`, `git stash -u` - forms that are often legitimate, where a false
+exit 2 would cost more than it saves. Non-blocking:
+`black` on each `.py` written, a destructive-operation report on a new migration. It no longer lives here: it is published as
 `django-guardrails@evalforms-team-marketplace` (repo `AndriiRuhlyuk/evalforms-team-marketplace`),
 and both the marketplace and the enabled plugin are declared in the **committed**
 `.claude/settings.json` - but declaring is not installing. Verified on a fresh clone under an
@@ -79,7 +90,7 @@ accepting it. The **plugin** is then still not fetched; someone must run `claude
 Until both happen the clone has **no gates and no error** - indistinguishable from a healthy one. Install with
 `--scope project`, or it lands in `user` scope and follows you into every unrelated repo on the
 machine. The install itself is a per-machine cache under
-`~/.claude/plugins/cache/`, which is why `claude plugin list` must show version `1.0.0` and
+`~/.claude/plugins/cache/`, which is why `claude plugin list` must show version `1.2.0` and
 exactly one `django-guardrails`; a second one means a stale marketplace is still registered and
 every gate runs twice. `.claude/settings.json` keeps beyond that only what is true of *this* repo: an
 `InstructionsLoaded` logger (see Path-specific Rules); a `matcher: compact` hook re-printing
@@ -89,13 +100,27 @@ and **write the comment**, an unannotated path being worse than no line at all.
 
 Two layers can refuse a Bash command and they are **not** interchangeable. The hook runs first,
 and only `exit 2` stops the call outright - before permission rules are read. Anything else a hook
-returns is advice: `deny` and `ask` are evaluated after, and a matching `deny` wins. So on plain
-`git clean` the `guard-migrations` branch runs, builds its warning, and changes nothing, because
-`Bash(git clean *)` under `deny` already decided. Keep that overlap: `deny` matches by prefix, so
-`sudo git clean -fd` walks past it and the hook is the only guard left - and `git -C <path> clean
--fd` currently walks past **both** (ARCH-14). Never relax a `deny` entry because "the hook covers
-it": what you get back is a prompt, and a prompt only stops anything in a session that honours
-`ask` (ARCH-13).
+returns is advice: `deny` and `ask` are evaluated after, and a matching `deny` wins. Since 1.1.0
+the `guard-migrations` branch for `git clean` exits 2, so it now decides first and in its own
+wording, and `Bash(git clean *)` under `deny` is never consulted. Keep the overlap anyway,
+because each covers a form the other misses: `deny` matches by prefix, so `sudo git clean -fd`
+and `git -C <path> clean -fd` walk past it and the hook is the only guard left on them (it
+catches both since 1.1.0 - the second one used to escape *both* layers, ARCH-14). Never relax a
+`deny` entry because "the hook covers it": unless that branch exits 2, what you get back is a
+prompt, and a prompt only stops anything in a session that honours `ask` - which is exactly what
+this repo's sessions were found not to do, and why the destructive branches were promoted out of
+`ask` in the first place (ARCH-13).
+
+Which is also why `permissions.ask` now lists **one** entry, `manage.py migrate`, kept as a
+reminder and honest about being nothing more. The other three were not deleted but replaced by
+gates that hold: `docker-compose down` gave way to an exit-2 branch on the `-v` form (the one
+that drops the volume, and with it `django_migrations`), and the two `Edit(**/migrations/**)`
+patterns to `guard-migration-edits`, which blocks only a migration git already tracks. That
+distinction is the point - a committed migration is already in colleagues' checkouts and applied
+somewhere, so editing it silently diverges schemas, while an uncommitted one is yours to edit,
+which is what writing a data migration by hand requires. A rule that looks like protection and
+delivers none is worse than an absent rule; if you find yourself adding one to `ask`, ask first
+whether the same thing can be decided from the filesystem or from git instead.
 
 Quality gates live in `.githooks/pre-commit`, **not** in `PostToolUse` - running tests after
 every edit would spend ten red intermediate states on one plan and push Claude into a
