@@ -1,6 +1,6 @@
 {
   "project": "Evaluation Form Service",
-  "updated": "2026-08-24",
+  "updated": "2026-08-25",
   "legend": { "true": "implemented", "false": "planned / backlog" },
   "features": [
     {
@@ -366,7 +366,7 @@
       "id": "ARCH-3",
       "category": "architecture",
       "name": "Deterministic gates via Claude Code hooks",
-      "description": "PreToolUse exit-2 gates: .env/key-file write protection plus secret-shaped literal scan (protect-secrets.py), and services.py-must-not-broadcast layering guard wired by matcher + if (guard-layering.py). SessionStart matcher=compact re-injects repo state and invariants; async SessionEnd writes per-session counters to .claude/telemetry.jsonl. Quality gate lives in .githooks/pre-commit (black on staged, flake8 repo-wide, tests with graceful skip when Postgres is down), enabled by core.hooksPath. PASS/FAIL matrix: .claude/hooks/test-hooks.sh",
+      "description": "PreToolUse exit-2 gates: .env/key-file write protection plus secret-shaped literal scan (protect-secrets.py), and services.py-must-not-broadcast layering guard wired by matcher + if (guard-layering.py). SessionStart matcher=compact re-injects repo state and invariants; async SessionEnd writes per-session counters to .claude/telemetry.jsonl. Quality gate lives in .githooks/pre-commit (black on staged, flake8 repo-wide, tests with graceful skip when Postgres is down), enabled by core.hooksPath. The portable gates no longer live in this repo: they ship as the django-guardrails plugin from the evalforms-team-marketplace marketplace, declared in the committed .claude/settings.json. Only three repo-specific hooks stayed in .claude/hooks/ (check-layout-drift.sh, reinject-context.sh, session-telemetry.py). PASS/FAIL matrix: /django-guardrails:hooks-matrix, 43 PASS expected.",
       "done": true
     },
     {
@@ -395,6 +395,27 @@
       "category": "bug",
       "name": "Nine more models paginate without an ordering",
       "description": "Found while closing BUG-6, deliberately left out of its scope. Only the three form models were fixed; a sweep over the pipeline apps shows these still have an empty Meta.ordering: TemplateFormTopic, TemplateFormItems, ReadOnlyFormTopic, WorkingFormTopic, WorkingFormItem, Candidate, EvaluationFormTopic, EvaluationFormItem, EvaluationScore, EvaluationFeedback. At least six of them are reachable through a paginated list route (the nested working-form topics/items, template-form items, and the candidates / evaluation-scores / evaluation-feedbacks routes), so they carry the same page-boundary defect. No test paginates them today, which is exactly why the suite stayed silent. The topic and item viewsets also use get_annotated_list(), so the GROUP BY trap from BUG-6 applies there too and a Meta.ordering alone will not be enough. Reference data (Question, Topic, TechStack, Project) is already ordered.",
+      "done": false
+    },
+    {
+      "id": "ARCH-6",
+      "category": "architecture",
+      "name": "Published plugin still documents this repo's files as if they were universal",
+      "description": "Found while moving django-guardrails to the marketplace (task 5b). Lives in the OTHER repo: AndriiRuhlyuk/evalforms-team-marketplace, at plugins/django-guardrails/skills/scaffold-tests/references/conventions.md. It cites concrete paths from this project - working_form/tests/tests_working_forms.py as the model test file, prefetch_count() from working_form/utils.py - as though every Django repo had them. In any other consumer repo those references are simply false, and a skill that cites a file the reader cannot open is worse than one that stays abstract. Deliberate at the time: the move was a 1:1 copy, not a refactor, and the risk of rewriting 23 files under a version bump outweighed the benefit while there is exactly one consumer. Fix before a second team installs the plugin: either generalise the guidance, or mark the examples as drawn from a reference implementation.",
+      "done": false
+    },
+    {
+      "id": "ARCH-7",
+      "category": "architecture",
+      "name": "Marketplace version check leaks a Python literal into its message",
+      "description": "Found while moving django-guardrails to the marketplace (task 5b). Lives in the OTHER repo: AndriiRuhlyuk/evalforms-team-marketplace, at scripts/check-versions.py. When plugin.json has no version key at all, the mismatch report prints \"plugin.json has 'None'\" - Python's None reaching a human-facing string through an f-string over a dict .get(). The check itself is correct and the CI job still fails as it should; only the message misleads, since a reader looks for a literal \"None\" in the JSON. Print \"(missing)\" for the absent-key case and keep quotes for real values.",
+      "done": false
+    },
+    {
+      "id": "ARCH-8",
+      "category": "architecture",
+      "name": "Marketplace CI warns on a deprecated Node runtime",
+      "description": "Found while moving django-guardrails to the marketplace (task 5b). Lives in the OTHER repo: AndriiRuhlyuk/evalforms-team-marketplace, at .github/workflows/validate-plugins.yml. Both jobs emit \"Node.js 20 is deprecated\" - it comes from actions/checkout@v4, not from any code we wrote, and nothing fails today. Recorded so the next reader does not re-investigate a green run: the fix is bumping the action, and it becomes real work only when GitHub drops the runtime.",
       "done": false
     }
   ]
