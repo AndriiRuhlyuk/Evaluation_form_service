@@ -72,33 +72,74 @@ green "flake8: чисто"
 # --- 3. Тести -------------------------------------------------------------
 # Проба з'єднання окремо від тестів: інакше "БД не піднята" і "тест упав"
 # віддають однаковий ненульовий код, і гейт блокує коміт за відсутню
-# інфраструктуру. Значення з .env читає сам Django через load_dotenv і
-# нікуди їх не друкує.
-db_reachable() {
-  timeout 15 "$PY" - <<'PROBE' >/dev/null 2>&1
-import os
-import sys
+# інфраструктуру.
+#
+# Чому НЕ локальний інтерпретатор, як було до 2026-08-25: .env описує
+# docker-мережу (POSTGRES_HOST - ім'я compose-сервісу), тож із хоста воно не
+# резолвиться; а під пісочницею .env ще й закритий на читання, і load_dotenv
+# у такому разі мовчить, лишаючи SECRET_KEY порожнім. Обидва провали виглядали
+# однаково - "Postgres недоступний" - тому тестова частина не запускалась
+# ЖОДНОГО разу, а порада підняти базу не могла зарадити. Основний шлях тепер
+# той самий контейнер, де живе застосунок; локальний лишається запасним.
 
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "evaluation_form_service.settings")
-import django
-
-django.setup()
-from django.db import connection
-
-try:
-    connection.ensure_connection()
-except Exception:
-    sys.exit(1)
-PROBE
+compose_cmd() {
+  if docker compose version >/dev/null 2>&1; then
+    printf 'docker compose'
+  elif docker-compose version >/dev/null 2>&1; then
+    printf 'docker-compose'
+  fi
 }
 
-if db_reachable; then
-  if ! "$PY" manage.py test --verbosity=1 2>&1 | tail -25; then
+# Сервіс шукаємо серед ЗАПУЩЕНИХ і за наявністю manage.py, а не за іменем:
+# ім'я django-сервісу в цьому compose - evaluation_form, у гілках буває інше,
+# а manage.py у WORKDIR - ознака надійна.
+find_runner() {
+  local compose svc
+  compose=$(compose_cmd)
+  [ -z "$compose" ] && return 1
+  for svc in $($compose ps --services 2>/dev/null); do
+    if $compose exec -T "$svc" test -f manage.py >/dev/null 2>&1; then
+      printf '%s exec -T %s python' "$compose" "$svc"
+      return 0
+    fi
+  done
+  return 1
+}
+
+RUNNER=$(find_runner) || RUNNER="$PY"
+
+# timeout не входить у стоковий macOS - він приїжджає з coreutils (як timeout
+# або gtimeout). Без цієї перевірки проба падала б із "command not found", і
+# гейт зарахував би це за недоступну базу: та сама підміна причини, яку цей
+# блок і лагодить. Немає жодного - працюємо без ліміту, проба сама коротка.
+TIMEOUT=""
+if command -v timeout >/dev/null 2>&1; then
+  TIMEOUT="timeout 30"
+elif command -v gtimeout >/dev/null 2>&1; then
+  TIMEOUT="gtimeout 30"
+fi
+
+# Вивід проби зберігаємо, а не глушимо в /dev/null: саме через це гейт роками
+# вгадував причину замість того, щоб її показати.
+probe_err=$($TIMEOUT $RUNNER manage.py shell \
+  -c 'from django.db import connection; connection.ensure_connection()' 2>&1)
+probe_rc=$?
+
+if [ $probe_rc -eq 0 ]; then
+  # Без конвеєра: `cmd | tail` віддає код tail, тобто нуль навіть на червоних
+  # тестах. Стара гілка мала цю пастку і не впала б на жодному падінні.
+  test_out=$($RUNNER manage.py test --verbosity=1 2>&1)
+  test_rc=$?
+  printf '%s\n' "$test_out" | tail -25
+  if [ $test_rc -ne 0 ]; then
     fail "тести червоні" "полагодь або зніми зміни зі staged"
   fi
-  green "тести: ok"
+  green "тести: ok (раннер: $RUNNER)"
 else
-  yellow "тести: ПРОПУЩЕНО - Postgres недоступний (docker-compose up -d db)"
+  yellow "тести: ПРОПУЩЕНО - Django не достукався до бази"
+  printf '%s\n' "$probe_err" | tail -3 >&2
+  yellow "  раннер: $RUNNER"
+  yellow "  підняти: docker-compose up -d (потрібен і сервіс застосунку, не лише db)"
   yellow "  lint-частина гейта відпрацювала; тести проженіть перед push"
 fi
 

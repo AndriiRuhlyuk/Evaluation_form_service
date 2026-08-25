@@ -53,7 +53,7 @@ evaluation_form_service/
 ├── templates/reports/         # evaluation_report.html - rendered by generate_html_report()
 ├── fixtures/                  # initial_data.json
 ├── docs/orchestration/        # per-feature plans (Ukrainian)
-├── .githooks/                 # one quality gate before every commit: black on staged, flake8 repo-wide, tests when Postgres answers; wired by `git config core.hooksPath .githooks`
+├── .githooks/                 # one quality gate before every commit: black on staged, flake8 repo-wide, tests inside whichever running compose service holds manage.py (the local interpreter cannot reach the DB - .env names the docker network); wired by `git config core.hooksPath .githooks`
 └── .claude/                   # rules/ by layer (api, data, domain, infra, integrations) + hooks/ (only the three that know about *this* repo)
 ```
 
