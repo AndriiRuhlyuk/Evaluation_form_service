@@ -71,8 +71,14 @@ there: `black` on each `.py` written, a prompt on any migration-touching command
 a destructive-operation report on a new migration. It no longer lives here: it is published as
 `django-guardrails@evalforms-team-marketplace` (repo `AndriiRuhlyuk/evalforms-team-marketplace`),
 and both the marketplace and the enabled plugin are declared in the **committed**
-`.claude/settings.json` - so a fresh clone is offered the install on first session and stays
-**ungated until that offer is accepted**. The install itself is a per-machine cache under
+`.claude/settings.json` - but declaring is not installing. Verified on a fresh clone under an
+isolated `CLAUDE_CONFIG_DIR`: it reports `No plugins installed` and `No marketplaces configured`.
+Two things gate it. Registration of the **marketplace** needs the workspace **trusted** - an
+untrusted one silently drops `permissions.allow` too, and `-p` skips the trust dialog rather than
+accepting it. The **plugin** is then still not fetched; someone must run `claude plugin install`.
+Until both happen the clone has **no gates and no error** - indistinguishable from a healthy one. Install with
+`--scope project`, or it lands in `user` scope and follows you into every unrelated repo on the
+machine. The install itself is a per-machine cache under
 `~/.claude/plugins/cache/`, which is why `claude plugin list` must show version `1.0.0` and
 exactly one `django-guardrails`; a second one means a stale marketplace is still registered and
 every gate runs twice. `.claude/settings.json` keeps beyond that only what is true of *this* repo: an
@@ -80,6 +86,16 @@ every gate runs twice. `.claude/settings.json` keeps beyond that only what is tr
 repo state and invariants after `/compact`; an `async` `SessionEnd` counter into
 `.claude/telemetry.jsonl`; and `check-layout-drift.sh` - when it speaks, fix **Project Layout**
 and **write the comment**, an unannotated path being worse than no line at all.
+
+Two layers can refuse a Bash command and they are **not** interchangeable. The hook runs first,
+and only `exit 2` stops the call outright - before permission rules are read. Anything else a hook
+returns is advice: `deny` and `ask` are evaluated after, and a matching `deny` wins. So on plain
+`git clean` the `guard-migrations` branch runs, builds its warning, and changes nothing, because
+`Bash(git clean *)` under `deny` already decided. Keep that overlap: `deny` matches by prefix, so
+`sudo git clean -fd` walks past it and the hook is the only guard left - and `git -C <path> clean
+-fd` currently walks past **both** (ARCH-14). Never relax a `deny` entry because "the hook covers
+it": what you get back is a prompt, and a prompt only stops anything in a session that honours
+`ask` (ARCH-13).
 
 Quality gates live in `.githooks/pre-commit`, **not** in `PostToolUse` - running tests after
 every edit would spend ten red intermediate states on one plan and push Claude into a

@@ -402,20 +402,62 @@
       "category": "architecture",
       "name": "Published plugin still documents this repo's files as if they were universal",
       "description": "Found while moving django-guardrails to the marketplace (task 5b). Lives in the OTHER repo: AndriiRuhlyuk/evalforms-team-marketplace, at plugins/django-guardrails/skills/scaffold-tests/references/conventions.md. It cites concrete paths from this project - working_form/tests/tests_working_forms.py as the model test file, prefetch_count() from working_form/utils.py - as though every Django repo had them. In any other consumer repo those references are simply false, and a skill that cites a file the reader cannot open is worse than one that stays abstract. Deliberate at the time: the move was a 1:1 copy, not a refactor, and the risk of rewriting 23 files under a version bump outweighed the benefit while there is exactly one consumer. Fix before a second team installs the plugin: either generalise the guidance, or mark the examples as drawn from a reference implementation.",
-      "done": false
+      "done": true
     },
     {
       "id": "ARCH-7",
       "category": "architecture",
       "name": "Marketplace version check leaks a Python literal into its message",
       "description": "Found while moving django-guardrails to the marketplace (task 5b). Lives in the OTHER repo: AndriiRuhlyuk/evalforms-team-marketplace, at scripts/check-versions.py. When plugin.json has no version key at all, the mismatch report prints \"plugin.json has 'None'\" - Python's None reaching a human-facing string through an f-string over a dict .get(). The check itself is correct and the CI job still fails as it should; only the message misleads, since a reader looks for a literal \"None\" in the JSON. Print \"(missing)\" for the absent-key case and keep quotes for real values.",
-      "done": false
+      "done": true
     },
     {
       "id": "ARCH-8",
       "category": "architecture",
       "name": "Marketplace CI warns on a deprecated Node runtime",
       "description": "Found while moving django-guardrails to the marketplace (task 5b). Lives in the OTHER repo: AndriiRuhlyuk/evalforms-team-marketplace, at .github/workflows/validate-plugins.yml. Both jobs emit \"Node.js 20 is deprecated\" - it comes from actions/checkout@v4, not from any code we wrote, and nothing fails today. Recorded so the next reader does not re-investigate a green run: the fix is bumping the action, and it becomes real work only when GitHub drops the runtime.",
+      "done": true
+    },
+    {
+      "id": "ARCH-9",
+      "category": "architecture",
+      "name": "Marketplace version check passes when no version exists anywhere",
+      "description": "Found while fixing ARCH-7. Lives in the OTHER repo: AndriiRuhlyuk/evalforms-team-marketplace, at scripts/check-versions.py. The invariant is written as an inequality between two dict.get() calls, so when BOTH marketplace.json and plugin.json lack a version key the comparison is None != None, which is false, and CI goes green on a marketplace that declares no version at all. This is the exact failure the check exists to prevent, inverted: the version-sync invariant is the one thing the plan named as non-optional, and its blind spot is the case where there is nothing to sync. Fix by requiring the key to be present before comparing values.",
+      "done": true
+    },
+    {
+      "id": "ARCH-10",
+      "category": "architecture",
+      "name": "Manifest validator misreports and crashes on a non-string version",
+      "description": "Found while fixing ARCH-7. Lives in the OTHER repo: AndriiRuhlyuk/evalforms-team-marketplace, at scripts/validate.py. Two independent defects on the version field. Line 116 formats it as f\"'{version!r}'\" - !r already adds quotes, so the message prints ''1.0.0'' and a reader cannot tell whether the stray quotes are part of the value. The second defect was originally recorded as a TypeError from VERSION_RE.match() on a non-string, on the premise that version was the one required key missing from REQUIRED_PLUGIN_STRING_KEYS - that premise was false (it was added in a3124ab) and the report had been written against an older tree. The real defect at the same spot: the type check and the emptiness check shared one condition, so any wrong type was reported as \"empty or whitespace-only\" - a message that sends the reader looking for whitespace that is not there. Fixed by splitting them, which repairs the message for all five string keys rather than just version. Recorded as a correction because the wrong premise reached this registry before anyone re-read the file.",
+      "done": true
+    },
+    {
+      "id": "ARCH-11",
+      "category": "architecture",
+      "name": "Published plugin's executable code assumes this repo's compose services",
+      "description": "Found while fixing ARCH-6, and deliberately left out of its scope because ARCH-6 was a text fix. The prose in scaffold-tests no longer claims another repo's paths exist, but the scripts still do: scripts/preflight.py hardcodes REQUIRED_SERVICES = (\"db\", \"celery\") and probes the database through the celery container, so a consumer without compose or with different service names gets a blocked verdict at step 1 - there is a --no-docker escape but no flag for a different service name. scripts/verify-tests.sh carries the same docker-compose exec -T celery default in TEST_CMD, its --help and its coverage branch, though TEST_CMD is at least a documented override. Separately, SKILL.md's allowed-tools front matter permits Bash(.venv/bin/black:*) and Bash(.venv/bin/flake8:*) specifically, so a uv or poetry project gets a permission prompt on every lint call - widening that list is a security decision, not a text edit. Portability of the prose is done; portability of the code is not.",
+      "done": true
+    },
+    {
+      "id": "ARCH-12",
+      "category": "architecture",
+      "name": "deny and hook ask are not interchangeable layers",
+      "description": "Found while verifying the non-blocking gates after the marketplace move, then corrected by investigation - the first version of this entry had the mechanism backwards. The order is: the PreToolUse hook runs FIRST, and an exit-2 hook stops the call before permission rules are read at all. Anything else a hook returns is advice; deny and ask rules are evaluated afterwards, and a matching deny wins. So on a plain `git clean ...` the guard-migrations branch is not unreachable - it runs, builds its warning about unrecoverable untracked migrations, and changes nothing, because Bash(git clean *) under deny had already decided. Verified empirically: `git clean -n` returns the permission layer's wording, not the hook's Ukrainian text. Keep the overlap rather than removing it. deny matches by prefix, so `sudo git clean -fd` walks past it and the hook becomes the only guard. Of the ten trigger branches in this hook, five are covered by NO permission rule at all (rm/mv/shred on migration files, git checkout without --, git reset, git stash, find -delete) - there the hook is the only thing standing, which combined with ARCH-13 means they currently guard nothing. Never relax a deny entry on the theory that the hook covers it: what you get back is a prompt, not a block.",
+      "done": true
+    },
+    {
+      "id": "ARCH-14",
+      "category": "architecture",
+      "name": "Destructive git forms slip past both the hook and the permission rules",
+      "description": "Found while investigating ARCH-12, by feeding synthetic payloads to guard-migrations.sh directly. The hook lives in the OTHER repo now: AndriiRuhlyuk/evalforms-team-marketplace, at plugins/django-guardrails/hooks/guard-migrations.sh - patching the ~/.claude/plugins/cache copy is pointless, the next marketplace update overwrites it. Silent in BOTH layers, each confirmed: `git -C <path> clean -fd` (the hook's regex wants `git` immediately before `clean`, so any global flag breaks it, and deny matches by prefix so it misses too); `git reset --hard` and `git stash` with no literal word migrations in the command (those branches sit under a `case *migrations*` guard, and no permission rule covers them) - untracked migrations die quietly; `git checkout .`; `tee <file>`; `cp /dev/null <file>`; and a python -c calling shutil.rmtree. `>>` redirection is covered correctly. The `git -C` gap is the clearest one to fix and it is a defect of the portable hook, not of this repo's configuration.",
+      "done": false
+    },
+    {
+      "id": "ARCH-13",
+      "category": "architecture",
+      "name": "The whole ask layer is inert in an auto-approving session",
+      "description": "Found while trying to prove guard-migrations.sh fires live. Running `rm working_form/migrations/0099_probe_nonexistent.py` produced no prompt at all - the command just ran. The hook is not at fault: fed the identical payload by hand it returns a correct permissionDecision \"ask\" with its explanation about breaking the migration dependency graph. The delivery is what fails. Confirmed from a second, independent direction: `docker-compose down --help`, which matches the `Bash(docker-compose down *)` entry under permissions.ask in .claude/settings.json, also ran with no prompt. So it is not a plugin defect and not a settings defect - in a session whose permission mode auto-approves, every ask-shaped guard is silently inert, whether it comes from settings or from a hook. Three explanations were ruled out rather than assumed. The rule is not missing: the /permissions panel lists Bash(docker-compose down *) under Ask, alongside the migrate and migrations-edit entries, under the promise that Claude Code will always ask. The pattern is not wrong: it matches the command that ran. The config is not overridden: defaultMode is default at project level and unset at local and user level, with no environment variable in play. What remains is the session's runtime permission mode, which is set interactively, is not written to any settings file, and therefore cannot be read back from one - the same shape of mistake this session kept finding, where the readable source is not the deciding one. What still works: deny rules (git push and .env stayed blocked all session) and exit-2 hooks (protect-secrets and guard-layering both blocked real writes). The consequence is that guard-migrations, the migration-editing ask rules, and the docker-compose down rule protect nothing in such a session while looking exactly like protection that is present. Decide deliberately: either run this repo in a mode where ask is honoured, or promote the guards that actually matter from ask to deny or exit 2.",
       "done": false
     }
   ]
