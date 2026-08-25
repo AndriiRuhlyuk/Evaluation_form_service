@@ -97,7 +97,8 @@
     ]
   },
   "enabledPlugins": {
-    "django-guardrails@evalforms-team-marketplace": true
+    "django-guardrails@evalforms-team-marketplace": true,
+    "drf-api-guard@evalforms-team-marketplace": true
   },
   "extraKnownMarketplaces": {
     "evalforms-team-marketplace": {
