@@ -40,8 +40,10 @@ in three apps, that must be applied together.
 - `check-new-migrations.sh` (PostToolUse) reports destructive operations after
   `makemigrations` runs.
 
-Both live in the `django-guardrails` plugin, not in `.claude/`, and the plugin is installed per
-machine - on a checkout where nobody installed it, neither fires and nothing says so.
+Both live in the `django-guardrails` plugin, not in `.claude/`. The plugin comes from the
+`evalforms-team-marketplace` marketplace declared in the committed `.claude/settings.json`, but
+the install is still per machine - on a checkout where the offer was declined, neither fires and
+nothing says so.
 
 A prompt from these is a question, not an obstacle - answer it by showing the file contents and
 the data consequences before proposing `migrate`.

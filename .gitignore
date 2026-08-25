@@ -369,3 +369,6 @@ backup_before_migrations.sql
 *.verify-backup
 *.verify-log
 *.verify-list-err
+
+# SDD scratch (subagent-driven-development ledger)
+.superpowers/

@@ -115,6 +115,17 @@
       }
     ]
   },
+  "extraKnownMarketplaces": {
+    "evalforms-team-marketplace": {
+      "source": {
+        "source": "github",
+        "repo": "AndriiRuhlyuk/evalforms-team-marketplace"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "django-guardrails@evalforms-team-marketplace": true
+  },
   "companyAnnouncements": [
     "Перед комітом: flake8 && black . && python manage.py test"
   ],

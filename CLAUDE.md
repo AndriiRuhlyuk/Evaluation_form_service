@@ -54,8 +54,6 @@ evaluation_form_service/
 ├── fixtures/                  # initial_data.json
 ├── docs/orchestration/        # per-feature plans (Ukrainian)
 ├── .githooks/                 # one quality gate before every commit: black on staged, flake8 repo-wide, tests when Postgres answers; wired by `git config core.hooksPath .githooks`
-├── .claude-plugin/            # marketplace manifest naming django-guardrails; registration is manual and per-machine (`claude plugin marketplace add ./`) - a fresh clone resolves nothing on its own
-├── django-guardrails/         # every portable gate, as an installed Claude Code plugin: manifest in .claude-plugin/, components at root, paths rebuilt on ${CLAUDE_PLUGIN_ROOT}; also runs standalone via `claude --plugin-dir ./django-guardrails`
 └── .claude/                   # rules/ by layer (api, data, domain, infra, integrations) + hooks/ (only the three that know about *this* repo)
 ```
 
@@ -70,9 +68,14 @@ The **plugin** holds every gate that would hold in any Django repo; three **bloc
 and the stderr says what to do instead: writing to `.env` or any key file, a secret-shaped
 literal into a tracked file, `group_send`/`channel_layer` into a `services.py`. Non-blocking
 there: `black` on each `.py` written, a prompt on any migration-touching command or `git clean`,
-a destructive-operation report on a new migration. It installs at **local** scope, declared in
-`.claude/settings.local.json` - per machine, so a fresh clone has **no gates at all** until
-someone installs it. `.claude/settings.json` keeps only what is true of *this* repo: an
+a destructive-operation report on a new migration. It no longer lives here: it is published as
+`django-guardrails@evalforms-team-marketplace` (repo `AndriiRuhlyuk/evalforms-team-marketplace`),
+and both the marketplace and the enabled plugin are declared in the **committed**
+`.claude/settings.json` - so a fresh clone is offered the install on first session and stays
+**ungated until that offer is accepted**. The install itself is a per-machine cache under
+`~/.claude/plugins/cache/`, which is why `claude plugin list` must show version `1.0.0` and
+exactly one `django-guardrails`; a second one means a stale marketplace is still registered and
+every gate runs twice. `.claude/settings.json` keeps beyond that only what is true of *this* repo: an
 `InstructionsLoaded` logger (see Path-specific Rules); a `matcher: compact` hook re-printing
 repo state and invariants after `/compact`; an `async` `SessionEnd` counter into
 `.claude/telemetry.jsonl`; and `check-layout-drift.sh` - when it speaks, fix **Project Layout**
@@ -81,9 +84,11 @@ and **write the comment**, an unannotated path being worse than no line at all.
 Quality gates live in `.githooks/pre-commit`, **not** in `PostToolUse` - running tests after
 every edit would spend ten red intermediate states on one plan and push Claude into a
 micro-fix loop. `/django-guardrails:hooks-matrix` re-runs the PASS/FAIL matrix for every plugin
-gate - run it after touching any, since a mis-wired gate fails silently. Editing a hook under
-`django-guardrails/` changes nothing until `claude plugin marketplace update
-evaluation-form-service`: the install is a copy, not a link to the worktree.
+gate - run it after touching any, since a mis-wired gate fails silently. Changing a gate is now a
+two-repo cycle: edit it in the marketplace worktree, bump both versions there (its own CI checks
+they match), push, then `claude plugin marketplace update evalforms-team-marketplace` here - the
+install is a cached copy, not a link, so nothing changes until that update runs. To try a change
+before publishing, point a session at the worktree with `claude --plugin-dir <path>`.
 
 ```bash
 docker-compose up --build      # Postgres, Redis, Daphne :8000, Celery worker/beat, Flower :5555
