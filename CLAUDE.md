@@ -102,8 +102,13 @@ every edit would spend ten red intermediate states on one plan and push Claude i
 micro-fix loop. `/django-guardrails:hooks-matrix` re-runs the PASS/FAIL matrix for every plugin
 gate - run it after touching any, since a mis-wired gate fails silently. Changing a gate is now a
 two-repo cycle: edit it in the marketplace worktree, bump both versions there (its own CI checks
-they match), push, then `claude plugin marketplace update evalforms-team-marketplace` here - the
-install is a cached copy, not a link, so nothing changes until that update runs. To try a change
+they match), push with a tag, then update **here** - and that is three steps, not one, because the
+install is a cached copy rather than a link. `claude plugin marketplace update
+evalforms-team-marketplace` refreshes only the catalogue; `claude plugin list` still reports the
+old version. Then `claude plugin update django-guardrails@evalforms-team-marketplace --scope
+project` moves the plugin itself - the **full** `name@marketplace` is required, since the bare
+name fails with a misleading `Plugin "django-guardrails" not found` at either scope. Finally
+restart the session: the CLI says as much, and until then the running session keeps the old copy. To try a change
 before publishing, point a session at the worktree with `claude --plugin-dir <path>`.
 
 ```bash
