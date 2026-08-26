@@ -1,7 +1,8 @@
 {
   "project": "Evaluation Form Service",
-  "updated": "2026-08-25",
+  "updated": "2026-08-26",
   "legend": { "true": "implemented", "false": "planned / backlog" },
+
   "features": [
     {
       "id": "AUTH-1",
@@ -143,7 +144,6 @@
       "description": "Pagination, anon/user throttling, django-filter, nested routers for working-form topics/items",
       "done": true
     },
-
     {
       "id": "BUG-1",
       "category": "bug",
@@ -200,7 +200,6 @@
       "description": "The mixin governs who may write in django admin but is mixed into some admin classes and not others; the two admins created for soft-delete restore (working_form, evaluation_form) deliberately skipped it pending a decision. Settle the rule and apply it uniformly - see .claude/rules/api/admin.md",
       "done": false
     },
-
     {
       "id": "QA-1",
       "category": "quality",
@@ -494,6 +493,41 @@
       "name": "drf-api-guard: three deliberate blind spots in the access gate",
       "description": "Recorded so nobody re-derives them. First, only module-level classes are checked: a factory function that builds and returns a ViewSet without permissions passes. Rejected on purpose - the pattern is rare and a false positive on a test fixture or a serializer factory costs more than the miss. Second, grandfathering keys on the class name, so renaming a legacy violator reads as introducing a new one and the gate demands permissions. Wrong in the safe direction, but still wrong. Third, rule 3 (writes from a serializer method that is not create/update/save) has no grandfathering at all: PostToolUse cannot see the before state, so a file carrying an old write in validate() warns on every edit. Tolerable only because that rule warns rather than blocks. Revisit the second one first if it bites. Fourth, adjacent rather than a blind spot: the `# noqa: api-guard` opt-out is broader than it reads. It silences both blocking rules, not just the permissions one, and it propagates to subclasses declared in the same file. Documented in the plugin README; recorded here because a reviewer skimming a diff for that comment needs to know it can be doing more than exempting the line it sits on.",
       "done": false
+    },
+    {
+      "id": "ARCH-20",
+      "category": "architecture",
+      "name": "Marketplace registration has five places, not three - and two were silently skipped on the previous release",
+      "description": "Found while adding django-deploy-checklist. Both the orchestration plan and the marketplace README stated that a new plugin needs three places: the plugins/ directory, the marketplace.json entry, and the matrix.plugin list in the workflow. Measuring the repository showed two more that nothing checks. drf-api-guard, released before this change, was missing from BOTH: it had no row in .github/CODEOWNERS, so review of that plugin was never routed to its owner (the default `*` rule masks this - a reviewer is still assigned, so the state is indistinguishable from correct until there is more than one owner), and no row in the README plugin table, so a consumer reading the front page would not learn the plugin exists. Neither omission makes CI red, because both validators read only marketplace.json and plugin.json; the workflow list, CODEOWNERS and the README carry no machine-comparable structure to check against. Fixed here: both missing plugins added to both files, and the README section rewritten from three places to five with a table naming the consequence of each omission. One extra defect removed while there: the README plugin table carried a `Версія` column duplicating the version a third time, outside what scripts/check-versions.py compares - so it could drift silently and be believed. The column is gone and the README now states that marketplace.json is the single source.",
+      "done": true
+    },
+    {
+      "id": "ARCH-21",
+      "category": "architecture",
+      "name": "django-deploy-checklist: four deliberate blind spots in the release checklist",
+      "description": "Recorded so nobody re-derives them, and revised after an adversarial review that overturned one of the four. First and most dangerous, unchanged: an application-level wait in a dependent service downgrades compose-readiness from RED to YELLOW, but the script cannot prove the wait covers the service it was credited to. A command like `wait_for_db` is typically written for the database and does nothing for the message broker, so on this project redis - the one dependency with no wait of any kind - receives the same YELLOW as db, which is genuinely guarded. The finding text says so explicitly, but a reader skimming levels would read YELLOW as checked. Second, unchanged: env keys are collected only from settings.py and any .py inside a settings/ package; a read from a task or a management command is invisible. Widening it would pull in tests and scripts that read variables which must not exist in production. Third, RESOLVED: the original note said a task name built from the file path would report a live task as missing under a src/ layout, and the review reproduced exactly that. Names are now compared by dotted suffix rather than equality, and library namespaces (celery., django_celery_beat., django_celery_results.) are always treated as declared, so celery.backend_cleanup in a fixture no longer blocks. The residue is a deliberate trade: a task whose suffix happens to collide with another is missed. For a RED-level rule a miss is cheaper than a false blocker. Fourth, unchanged: migration-hygiene compares the working tree against HEAD, not history against history, so a migration that was edited AND committed in a separate commit is invisible - which is the common case in someone else's pull request, exactly where it matters most.",
+      "done": false
+    },
+    {
+      "id": "CFG-1",
+      "category": "configuration",
+      "name": "Environment sample declares 7 of the 11 keys the code actually reads",
+      "description": "Measured, not inferred: settings.py reads 11 distinct environment keys, the sample declares 7. Four are read WITHOUT a default and are absent from the sample - CELERY_BROKER_URL, CELERY_RESULT_BACKEND, PEOPLEFORCE_API_KEY, PEOPLEFORCE_API_URL - so an environment assembled from the sample gets None for all four. Celery silently loses its broker, and the CRM integration sends requests with no key rather than failing loudly. A fifth, DJANGO_DEBUG, is absent but has a default of \"False\", which is the safe direction and only means nobody sets it deliberately. Nothing in the repository catches this: the sample is not compared to the code anywhere, and the deny rule Read(**/.env.*) means a session cannot casually diff them either. Reproduce with `python3 plugins/django-deploy-checklist/scripts/deploy-audit.py --repo .` from the marketplace clone - it reports exactly these four as RED and DJANGO_DEBUG as YELLOW. Fix is a one-line-per-key addition to the sample with placeholder values, never real ones.",
+      "done": false
+    },
+    {
+      "id": "CFG-2",
+      "category": "configuration",
+      "name": "manage.py check --deploy cannot run without a database, so the security warnings it exists to surface are never seen",
+      "description": "Measured while designing the deploy checklist. Running `manage.py check --deploy` with dummy credentials fails with SystemCheckError, and the cause has nothing to do with deployment: drf_spectacular.E001 fires because schema generation opens a database connection, and a failed connection is reported as a check ERROR. The command therefore exits non-zero for a connectivity reason, which trains the reader to ignore its exit code. Underneath, when the connection does succeed, there are five genuine findings - security.W004 (no SECURE_HSTS_SECONDS), W008 (SECURE_SSL_REDIRECT not True), W012 (SESSION_COOKIE_SECURE not True), W016 (CSRF_COOKIE_SECURE not True), and W009 which only appeared because the probe used a dummy SECRET_KEY. They sit under eight lines of drf_spectacular W001/W002 noise about unresolved type hints. Two separate things to decide: whether to set the four security settings (they are production concerns and DEBUG is env-driven, so they are not automatic), and whether to silence the spectacular noise via SPECTACULAR_SETTINGS so the deploy check becomes readable at all. The /deploy-check command documents the trap in the meantime.",
+      "done": false
+    },
+    {
+      "id": "ARCH-22",
+      "category": "quality",
+      "name": "A self-test matrix only catches what its fixtures were written to expose - measured, not argued",
+      "description": "The strongest evidence yet for how a green matrix misleads, and worth keeping because it cost nothing to find and would have cost a release to discover. django-deploy-checklist shipped its first version at 47 PASS, 0 FAIL, including a parity category specifically built to prove that its two docker-compose parsing branches agree. An adversarial subagent, told to build fixtures and run them rather than read and reason, found twelve defects that all 47 cases missed. Five shared one root: every fixture in the matrix was written WITHOUT comments, and the simplified parser stripped `#` nowhere. So `- store  # база` became a service name carrying its own comment, the dependency vanished, and a compose file with a real start-order race was reported clean. `condition: service_healthy  # чекаємо` stopped matching the constant and the healthiest possible file was reported sick. A wait token mentioned in a comment - `# TODO wait_for_db колись` - counted as a real wait and removed a release blocker. Parity could not catch any of it: parity compares two branches on the inputs it is given, and no given input let the bug appear. Four more were false release blockers reachable from ordinary use: `git diff --name-only HEAD` lists ADDED files too, so a plain `git add` on a fresh migration produced RED 'already applied elsewhere' about a file that was never in history. The general lesson, stated once: a matrix measures the author's imagination, and the cheapest way to widen it is to hand the artefact to something that is trying to break it, with the rule that no claim counts without a fixture and a run. All twelve now have cases; the matrix is at 74 PASS, 0 FAIL. Second wave, worth recording separately because it is the failure mode of fixing: the comment-stripping fix introduced its own silent lie. Tracking quotes character by character meant an apostrophe inside an unquoted word - `command: echo don't panic  # TODO wait_for_db` - opened a quote state that never closed on that line, so the `#` counted as quoted, the comment stayed in the command text, and the wait-token defect came back from the dead. The re-check that found it was the same subagent, re-run against its OWN saved fixtures rather than new ones - which is the point: a fix is not verified by the tests written for it, only by the tests that caught the original. The rule is now YAML's own: a quote opens a scalar only where the scalar begins. Matrix at 82 PASS, 0 FAIL.",
+      "done": true
     }
   ]
 }
