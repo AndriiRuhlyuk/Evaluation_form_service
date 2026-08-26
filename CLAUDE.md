@@ -14,9 +14,12 @@ pushed to the PeopleForce CRM. No frontend here - REST plus one WebSocket channe
 
 ## Tech Stack
 
-- **Core:** Python 3.13, Django 5.2.6, DRF 3.16.1, PostgreSQL 16 via psycopg 3
-- **Realtime:** Channels 4.3.1 + Daphne 4.2.1 (ASGI), `channels_redis` over Redis
-- **Async jobs:** Celery 5.5.3 + `django-celery-beat` (DB scheduler), Flower
+Library versions live in `requirements.txt` and are deliberately not restated here: a number
+copied into this file is a place to drift that nothing checks.
+
+- **Core:** Python 3.13, Django, DRF, PostgreSQL 16 via psycopg 3
+- **Realtime:** Channels + Daphne (ASGI), `channels_redis` over Redis
+- **Async jobs:** Celery + `django-celery-beat` (DB scheduler), Flower
 - **API surface:** simplejwt (email login), drf-spectacular, django-filter, drf-nested-routers
 - **Admin and tooling:** django-unfold, nested_admin, debug-toolbar, black, flake8, whitenoise
 - **Infrastructure:** Docker Compose - web, db, redis, celery, celery-beat, flower
@@ -53,114 +56,16 @@ evaluation_form_service/
 ├── templates/reports/         # evaluation_report.html - rendered by generate_html_report()
 ├── fixtures/                  # initial_data.json
 ├── docs/orchestration/        # per-feature plans (Ukrainian)
-├── .githooks/                 # one quality gate before every commit: black on staged, flake8 repo-wide, tests inside whichever running compose service holds manage.py (the local interpreter cannot reach the DB - .env names the docker network); wired by `git config core.hooksPath .githooks`
-└── .claude/                   # rules/ by layer (api, data, domain, infra, integrations) + hooks/ (only the three that know about *this* repo)
+├── .githooks/                 # the pre-commit quality gate - what it runs and why: gates.md
+└── .claude/                   # rules/ by layer + the three hooks that know about *this* repo
 ```
 
 `check-layout-drift.sh` verifies this tree against the real structure. Indentation is a
-contract - exactly 4 characters per level; the tracked-filename whitelist is documented in
-the script itself.
+contract - exactly 4 characters per level; the tracked-filename whitelist is in the script.
 
 ## Commands
 
-Tooling lives in `.venv/`. Activate it or prefix with `.venv/bin/`. Two hook sources act on you.
-The **plugin** holds every gate that would hold in any Django repo; five **block** with exit 2,
-and the stderr says what to do instead: writing to `.env` or any key file, a secret-shaped
-literal into a tracked file, `group_send`/`channel_layer` into a `services.py`, editing a
-migration **git already tracks**, and any shell command that would destroy migrations. That last
-one stopped being a function of the command string: besides `git clean` in any form,
-`docker-compose down -v`, and `rm`/`mv`/`tee`/`cp`/`find -delete`/redirection/`shutil.rmtree`
-aimed at a path under `migrations/`, it reads three more sources - the **filesystem** (`rm -rf
-working_form/` names no migration, so each path token is checked on disk for a `migrations`
-directory), **git aliases** (`git cl` is expanded from `git config`), and the **contents** of a
-script run by path (`bash deploy.sh`, comment lines stripped). Blocked means blocked: you cannot
-wave it through from the session, so deleting a migration or editing a committed one on purpose
-is something you run yourself in the terminal - and for a committed one the right move is
-usually a new migration, not an edit. Only a **prompt**, deliberately: `git reset --hard`,
-`git checkout .`, `git restore`, `git stash -u` - forms that are often legitimate, where a false
-exit 2 would cost more than it saves. Non-blocking:
-`black` on each `.py` written, a destructive-operation report on a new migration. It no longer lives here: it is published as
-`django-guardrails@evalforms-team-marketplace` (repo `AndriiRuhlyuk/evalforms-team-marketplace`),
-one of **three** plugins that repo now serves. `drf-api-guard` blocks an API class declaring
-neither `permission_classes` nor `get_permissions()`, and `fields = "__all__"` in a serializer
-`Meta`. `django-deploy-checklist` has **no hooks at all** - it answers `/deploy-check` with four
-static release invariants, so nothing of it fires while you write. The marketplace and all three
-enabled plugins are declared in the **committed**
-`.claude/settings.json` - but declaring is not installing. Verified on a fresh clone under an
-isolated `CLAUDE_CONFIG_DIR`: it reports `No plugins installed` and `No marketplaces configured`.
-Two things gate it. Registration of the **marketplace** needs the workspace **trusted** - an
-untrusted one silently drops `permissions.allow` too, and `-p` skips the trust dialog rather than
-accepting it. The **plugin** is then still not fetched; someone must run `claude plugin install`.
-Until both happen the clone has **no gates and no error** - indistinguishable from a healthy one. Install with
-`--scope project`, or it lands in `user` scope and follows you into every unrelated repo on the
-machine. The install itself is a per-machine cache under
-`~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/` - note the version directory, which
-is why a path copied from the marketplace repo does not resolve there. Hence the invariant:
-`claude plugin list` must show **exactly one** entry per plugin, each at `Scope: project`; a
-second entry for any of them means a stale marketplace is still registered and every gate runs
-twice. Read that invariant off `plugin list` and nowhere else: `update` leaves the previous
-version's directory beside the new one, so **two directories under one plugin in the cache are
-normal** and mean nothing - duplication that doubles gates is a second registered *marketplace*,
-not a second cached version, which nothing loads. Neither does the `✔ updated ... Restart to
-apply` line prove the files moved; the proof is running the matrix **from the new version
-directory**. Version numbers are deliberately not pinned here - `check-versions.py` in the marketplace
-is what holds them equal, and a number copied into this file would be a place to drift that
-nothing checks. `.claude/settings.json` keeps beyond that only what is true of *this* repo: an
-`InstructionsLoaded` logger (see Path-specific Rules); a `matcher: compact` hook re-printing
-repo state and invariants after `/compact`; an `async` `SessionEnd` counter into
-`.claude/telemetry.jsonl`; and `check-layout-drift.sh` - when it speaks, fix **Project Layout**
-and **write the comment**, an unannotated path being worse than no line at all.
-
-Two layers can refuse a Bash command and they are **not** interchangeable. The hook runs first,
-and only `exit 2` stops the call outright - before permission rules are read. Anything else a hook
-returns is advice: `deny` and `ask` are evaluated after, and a matching `deny` wins. Since 1.1.0
-the `guard-migrations` branch for `git clean` exits 2, so it now decides first and in its own
-wording, and `Bash(git clean *)` under `deny` is never consulted. Keep the overlap anyway,
-because each covers a form the other misses: `deny` matches by prefix, so `sudo git clean -fd`
-and `git -C <path> clean -fd` walk past it and the hook is the only guard left on them (it
-catches both since 1.1.0 - the second one used to escape *both* layers, ARCH-14). Never relax a
-`deny` entry because "the hook covers it": unless that branch exits 2, what you get back is a
-prompt, and a prompt only stops anything in a session that honours `ask` - which is exactly what
-this repo's sessions were found not to do, and why the destructive branches were promoted out of
-`ask` in the first place (ARCH-13).
-
-Which is also why `permissions.ask` now lists **one** entry, `manage.py migrate`, kept as a
-reminder and honest about being nothing more. The other three were not deleted but replaced by
-gates that hold: `docker-compose down` gave way to an exit-2 branch on the `-v` form (the one
-that drops the volume, and with it `django_migrations`), and the two `Edit(**/migrations/**)`
-patterns to `guard-migration-edits`, which blocks only a migration git already tracks. That
-distinction is the point - a committed migration is already in colleagues' checkouts and applied
-somewhere, so editing it silently diverges schemas, while an uncommitted one is yours to edit,
-which is what writing a data migration by hand requires. A rule that looks like protection and
-delivers none is worse than an absent rule; if you find yourself adding one to `ask`, ask first
-whether the same thing can be decided from the filesystem or from git instead.
-
-Quality gates live in `.githooks/pre-commit`, **not** in `PostToolUse` - running tests after
-every edit would spend ten red intermediate states on one plan and push Claude into a
-micro-fix loop. Each plugin carries its own matrix and its own command:
-`/django-guardrails:hooks-matrix`, `/drf-api-guard:hooks-matrix`,
-`/django-deploy-checklist:audit-matrix` - the last one lives under `tests/`, not `hooks/`,
-because that plugin has no hooks and a `hooks/` directory holding none would be a path that
-lies. Run the matching one after touching any gate, since a mis-wired gate fails silently.
-Changing a gate is a
-two-repo cycle: edit it in the marketplace worktree, bump both versions there (its own CI checks
-they match), push with a tag, then update **here** - and that is three steps, not one, because the
-install is a cached copy rather than a link. `claude plugin marketplace update
-evalforms-team-marketplace` refreshes only the catalogue; `claude plugin list` still reports the
-old version. Then `claude plugin update django-guardrails@evalforms-team-marketplace --scope
-project` moves the plugin itself - the **full** `name@marketplace` is required, since the bare
-name fails with a misleading `Plugin "django-guardrails" not found` at either scope. Finally
-restart the session: the CLI says as much, and until then the running session keeps the old copy. To try a change
-before publishing, point a session at the worktree with `claude --plugin-dir <path>`.
-
-Adding a **new** plugin inverts that first step rather than repeating it. `marketplace update`
-is not the optional half there - it is the whole fix, and it must come **before** `install`:
-the local catalogue is a snapshot, so a plugin merged into `main` an hour ago is simply absent
-from it and `install` fails with `Plugin "<name>" not found in marketplace`. That message names
-the remedy correctly; the paragraph above, read out of context, suggests the opposite. After
-the refresh, `install --scope project` succeeds immediately. Verify by **running** the installed
-copy, never by the `✔ Successfully installed` line - a matrix executed out of
-`~/.claude/plugins/cache/.../<version>/` is the only evidence that the files actually landed.
+Tooling lives in `.venv/`. Activate it or prefix with `.venv/bin/`.
 
 ```bash
 docker-compose up --build      # Postgres, Redis, Daphne :8000, Celery worker/beat, Flower :5555
@@ -179,6 +84,28 @@ flake8    # config in setup.cfg
 regression introduced by your diff. The test suite is the opposite of a signal; `testing.md`
 explains why a green run proves almost nothing here.
 
+## Gates and Plugins
+
+Three plugins from `AndriiRuhlyuk/evalforms-team-marketplace`, declared in the **committed**
+`.claude/settings.json`. What each one blocks is in that plugin's README; how to install and
+update it is in the marketplace README. Neither is restated here.
+
+- **`django-guardrails`** - the gates that would hold in any Django repo: writing to `.env` or
+  a key file, a secret-shaped literal, `group_send` in a `services.py`, editing a migration git
+  already tracks, and any command that would destroy migrations.
+- **`drf-api-guard`** - an API class declaring neither `permission_classes` nor
+  `get_permissions()`, and `fields = "__all__"` in a serializer `Meta`.
+- **`django-deploy-checklist`** - no hooks at all; it answers `/deploy-check` with four static
+  release invariants, so nothing of it fires while you write.
+
+**Declaring is not installing**, and the failure is silent: a fresh clone reports `No plugins
+installed`, raises no error, and is indistinguishable from a healthy one. The invariant to read
+is `claude plugin list` - **exactly one** entry per plugin, each at `Scope: project`. A second
+entry means a stale marketplace is still registered and every gate runs twice.
+
+The two refusal layers and their order, why `permissions.ask` holds one entry, which matrix to
+run after touching a gate: `.claude/rules/infra/gates.md`, loaded by `.claude/settings.json`.
+
 ## Architecture
 
 Four apps form one pipeline. Each stage is a **clone** of the previous one, never an FK to
@@ -193,8 +120,7 @@ question + topic + techstack   question bank
 
 The three `clone_*` functions carry the highest bug density in the repo - the tree above names
 the two files holding them. `template_form/models.py` additionally holds the abstract bases
-(`BaseForm`, `BaseFormItems`) that all three stages inherit, so it is shared foundation rather
-than stage one.
+(`BaseForm`, `BaseFormItems`) all three stages inherit, so it is shared foundation, not stage one.
 
 **First question on any task: which stage?** Touching two stages means two tasks. Everything
 below that - layering, transactions, query discipline, verification order - lives in
@@ -204,8 +130,8 @@ below that - layering, transactions, query discipline, verification order - live
 
 `.env` must define `SECRET_KEY`, `DJANGO_DEBUG`, `POSTGRES_DB/USER/PASSWORD/HOST/PORT`,
 `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, `PEOPLEFORCE_API_KEY`, `PEOPLEFORCE_API_URL`,
-`PGDATA`. None has a default except `DJANGO_DEBUG`, and `Read(**/.env.*)` is denied so
-`.env.sample` is unreadable - `local-setup.md` explains what each one breaks when missing.
+`PGDATA`. Only `DJANGO_DEBUG` has a default, and `Read(**/.env.*)` is denied so `.env.sample`
+is unreadable - `local-setup.md` says what each one breaks when missing.
 
 ## Docs and Conventions
 
@@ -218,33 +144,18 @@ the code-comment convention lives in `general.md`.
 ## Path-specific Rules
 
 Every rule in `.claude/rules/` is path-scoped - **nothing there loads unconditionally**. The
-directory is scanned recursively, so the folders below are organisation for humans; only
-`paths:` decides what enters context.
+directory is scanned recursively, so folders (`api`, `data`, `domain`, `infra`, `integrations`)
+are organisation for humans; only `paths:` decides what enters context. What a rule covers is
+its own `description:` and what triggers it is its own `paths:` - neither is mirrored here,
+because a copied glob is a place to drift that nothing checks. To see the set:
+`find .claude/rules -name '*.md' -exec head -6 {} +` - `**` needs zsh or bash `globstar` and
+silently returns a short list without either. Two load on nearly everything - `general.md` on any `.py`,
+`workflow.md` on `.py` and `docs/plans/**`; the rest are one subsystem each.
 
-| Rule | Loads for | Covers |
-|---|---|---|
-| `general.md` | `**/*.py` | layering, order of work, query discipline, comment language, verification |
-| `workflow.md` | `**/*.py`, `docs/plans/**` | TDD via `superpowers:test-driven-development`, always offer `superpowers:subagent-driven-development` for plans |
-| `api/views.md` | `**/views.py`, `**/urls.py` | slug lookup, real URL shapes, viewset defaults, who owns the broadcast |
-| `api/serializers.md` | `**/serializers.py` | lazily validated `Meta.fields`, `M2MListField`, no writes here |
-| `api/permissions.md` | `**/permissions.py` | the twelve classes, the missing global default, JWT and roles |
-| `api/admin.md` | `**/admin.py`, `admin_mixins.py` | unfold ordering, the unevenly applied mixin, `nested_admin` is unused |
-| `data/models.md` | `**/models.py` | shared abstract bases, manager selection, `is_active` filtered in views |
-| `data/migrations.md` | `**/migrations/*.py` | `showmigrations` first, the uncommitted five, what the hooks do |
-| `domain/forms-lifecycle.md` | `template_form/**`, `working_form/**`, `evaluation_form/**` | snapshots, cloning, draft/publish, the two quorum rules, soft delete |
-| `domain/services.md` | `**/services.py` | transaction boundaries, services never broadcast, private helpers |
-| `domain/realtime.md` | consumer, middleware, routing, `working_form/views.py`, `asgi.py` | ASGI wiring, WebSocket auth, the broadcast contract |
-| `integrations/reporting-crm.md` | `evaluation_form/services.py`, `tasks.py`, `templates/reports/**` | completion flow, report generation, PeopleForce sync |
-| `infra/local-setup.md` | `settings.py`, `celery.py`, `asgi.py`, `docker-compose.yaml`, `Dockerfile` | every env var and what it breaks, compose topology |
-| `testing.md` | `**/tests.py`, `**/tests/*.py` | why green proves nothing, what to cover first |
-
-Path-scoped rules are **not** re-injected after `/compact`; they reload the next time you open a
-matching file. Anything that must survive compaction belongs in this file, not in a rule.
-
-When a rule seems ignored, `/memory` will not help - it lists the CLAUDE.md family only and
-never scans `.claude/rules/`. Use `.claude/instructions.log` instead (gitignored, one JSON line
-per load): it records the rule file, the `trigger` file that matched and the `globs` that did
-it. An expected line missing there means the glob did not match, not that the rule was skipped.
+Rules are **not** re-injected after `/compact`; they reload the next time you open a matching
+file, so anything that must survive compaction belongs here, not in a rule. The rule index is
+built at session start: a rule created mid-session activates only after `/clear`. When one
+seems ignored, read `.claude/instructions.log` - `/memory` lists the CLAUDE.md family only.
 
 ## Compact Instructions
 
