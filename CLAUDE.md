@@ -81,7 +81,11 @@ usually a new migration, not an edit. Only a **prompt**, deliberately: `git rese
 exit 2 would cost more than it saves. Non-blocking:
 `black` on each `.py` written, a destructive-operation report on a new migration. It no longer lives here: it is published as
 `django-guardrails@evalforms-team-marketplace` (repo `AndriiRuhlyuk/evalforms-team-marketplace`),
-and both the marketplace and the enabled plugin are declared in the **committed**
+one of **three** plugins that repo now serves. `drf-api-guard` blocks an API class declaring
+neither `permission_classes` nor `get_permissions()`, and `fields = "__all__"` in a serializer
+`Meta`. `django-deploy-checklist` has **no hooks at all** - it answers `/deploy-check` with four
+static release invariants, so nothing of it fires while you write. The marketplace and all three
+enabled plugins are declared in the **committed**
 `.claude/settings.json` - but declaring is not installing. Verified on a fresh clone under an
 isolated `CLAUDE_CONFIG_DIR`: it reports `No plugins installed` and `No marketplaces configured`.
 Two things gate it. Registration of the **marketplace** needs the workspace **trusted** - an
@@ -90,9 +94,18 @@ accepting it. The **plugin** is then still not fetched; someone must run `claude
 Until both happen the clone has **no gates and no error** - indistinguishable from a healthy one. Install with
 `--scope project`, or it lands in `user` scope and follows you into every unrelated repo on the
 machine. The install itself is a per-machine cache under
-`~/.claude/plugins/cache/`, which is why `claude plugin list` must show version `1.2.0` and
-exactly one `django-guardrails`; a second one means a stale marketplace is still registered and
-every gate runs twice. `.claude/settings.json` keeps beyond that only what is true of *this* repo: an
+`~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/` - note the version directory, which
+is why a path copied from the marketplace repo does not resolve there. Hence the invariant:
+`claude plugin list` must show **exactly one** entry per plugin, each at `Scope: project`; a
+second entry for any of them means a stale marketplace is still registered and every gate runs
+twice. Read that invariant off `plugin list` and nowhere else: `update` leaves the previous
+version's directory beside the new one, so **two directories under one plugin in the cache are
+normal** and mean nothing - duplication that doubles gates is a second registered *marketplace*,
+not a second cached version, which nothing loads. Neither does the `✔ updated ... Restart to
+apply` line prove the files moved; the proof is running the matrix **from the new version
+directory**. Version numbers are deliberately not pinned here - `check-versions.py` in the marketplace
+is what holds them equal, and a number copied into this file would be a place to drift that
+nothing checks. `.claude/settings.json` keeps beyond that only what is true of *this* repo: an
 `InstructionsLoaded` logger (see Path-specific Rules); a `matcher: compact` hook re-printing
 repo state and invariants after `/compact`; an `async` `SessionEnd` counter into
 `.claude/telemetry.jsonl`; and `check-layout-drift.sh` - when it speaks, fix **Project Layout**
@@ -124,8 +137,12 @@ whether the same thing can be decided from the filesystem or from git instead.
 
 Quality gates live in `.githooks/pre-commit`, **not** in `PostToolUse` - running tests after
 every edit would spend ten red intermediate states on one plan and push Claude into a
-micro-fix loop. `/django-guardrails:hooks-matrix` re-runs the PASS/FAIL matrix for every plugin
-gate - run it after touching any, since a mis-wired gate fails silently. Changing a gate is now a
+micro-fix loop. Each plugin carries its own matrix and its own command:
+`/django-guardrails:hooks-matrix`, `/drf-api-guard:hooks-matrix`,
+`/django-deploy-checklist:audit-matrix` - the last one lives under `tests/`, not `hooks/`,
+because that plugin has no hooks and a `hooks/` directory holding none would be a path that
+lies. Run the matching one after touching any gate, since a mis-wired gate fails silently.
+Changing a gate is a
 two-repo cycle: edit it in the marketplace worktree, bump both versions there (its own CI checks
 they match), push with a tag, then update **here** - and that is three steps, not one, because the
 install is a cached copy rather than a link. `claude plugin marketplace update
@@ -135,6 +152,15 @@ project` moves the plugin itself - the **full** `name@marketplace` is required, 
 name fails with a misleading `Plugin "django-guardrails" not found` at either scope. Finally
 restart the session: the CLI says as much, and until then the running session keeps the old copy. To try a change
 before publishing, point a session at the worktree with `claude --plugin-dir <path>`.
+
+Adding a **new** plugin inverts that first step rather than repeating it. `marketplace update`
+is not the optional half there - it is the whole fix, and it must come **before** `install`:
+the local catalogue is a snapshot, so a plugin merged into `main` an hour ago is simply absent
+from it and `install` fails with `Plugin "<name>" not found in marketplace`. That message names
+the remedy correctly; the paragraph above, read out of context, suggests the opposite. After
+the refresh, `install --scope project` succeeds immediately. Verify by **running** the installed
+copy, never by the `✔ Successfully installed` line - a matrix executed out of
+`~/.claude/plugins/cache/.../<version>/` is the only evidence that the files actually landed.
 
 ```bash
 docker-compose up --build      # Postgres, Redis, Daphne :8000, Celery worker/beat, Flower :5555
