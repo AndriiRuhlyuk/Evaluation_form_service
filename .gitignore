@@ -372,3 +372,10 @@ backup_before_migrations.sql
 
 # SDD scratch (subagent-driven-development ledger)
 .superpowers/
+
+# tools/sync_features має власний venv, окремий від сервісного
+tools/sync_features/.venv/
+tools/sync_features/sync-artifacts/
+
+# матеріали лекції 5.7, не частина сервісу
+5.7-sdk*

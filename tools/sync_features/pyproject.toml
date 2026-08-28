@@ -1,0 +1,9 @@
+[project]
+name = "sync-features"
+version = "0.1.0"
+description = "Агент звіряє Features_list.json з git-історією"
+requires-python = ">=3.11"
+dependencies = ["claude-agent-sdk"]
+
+[tool.setuptools]
+py-modules = ["sync_features", "guard", "gitscan", "verify"]
