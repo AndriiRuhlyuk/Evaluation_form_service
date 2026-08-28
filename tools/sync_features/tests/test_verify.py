@@ -213,6 +213,35 @@ class TestValidateSchema(unittest.TestCase):
         }
         self.assertEqual(validate_schema(payload), [])
 
+    def test_flipped_to_done_null_is_invalid(self):
+        payload = {"flipped_to_done": None, "new_entries": []}
+        problems = validate_schema(payload)
+        self.assertTrue(problems)
+        self.assertTrue(any("flipped_to_done" in p for p in problems))
+
+    def test_new_entries_null_is_invalid(self):
+        payload = {"flipped_to_done": [], "new_entries": None}
+        problems = validate_schema(payload)
+        self.assertTrue(problems)
+        self.assertTrue(any("new_entries" in p for p in problems))
+
+    def test_absent_key_reports_only_missing_key(self):
+        payload = {"new_entries": []}
+        problems = validate_schema(payload)
+        self.assertTrue(problems)
+        self.assertTrue(any("flipped_to_done" in p for p in problems))
+        self.assertEqual(len(problems), 1)
+
+    def test_string_flipped_to_done_still_caught(self):
+        payload = {"flipped_to_done": "ARCH-5", "new_entries": []}
+        problems = validate_schema(payload)
+        self.assertTrue(problems)
+        self.assertTrue(any("flipped_to_done" in p for p in problems))
+
+    def test_empty_lists_are_valid(self):
+        payload = {"flipped_to_done": [], "new_entries": []}
+        self.assertEqual(validate_schema(payload), [])
+
 
 class TestRunAll(unittest.TestCase):
     def test_clean_run_returns_empty(self):
