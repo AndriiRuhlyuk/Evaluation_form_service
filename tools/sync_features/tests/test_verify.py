@@ -180,6 +180,39 @@ class TestValidateSchema(unittest.TestCase):
         }
         self.assertTrue(validate_schema(payload))
 
+    def test_flipped_to_done_must_be_list(self):
+        payload = {"flipped_to_done": "ARCH-5", "new_entries": []}
+        problems = validate_schema(payload)
+        self.assertTrue(problems)
+        self.assertTrue(any("flipped_to_done" in p for p in problems))
+
+    def test_new_entries_must_be_list_not_string(self):
+        payload = {"flipped_to_done": [], "new_entries": "ARCH-28"}
+        problems = validate_schema(payload)
+        self.assertTrue(problems)
+        self.assertTrue(any("new_entries" in p for p in problems))
+
+    def test_new_entries_must_be_list_not_dict(self):
+        payload = {"flipped_to_done": [], "new_entries": {"id": "ARCH-28"}}
+        problems = validate_schema(payload)
+        self.assertTrue(problems)
+        self.assertTrue(any("new_entries" in p for p in problems))
+
+    def test_valid_payload_still_passes(self):
+        payload = {
+            "flipped_to_done": ["ARCH-5"],
+            "new_entries": [
+                {
+                    "id": "ARCH-28",
+                    "category": "ARCH",
+                    "name": "н",
+                    "description": "о",
+                    "done": False,
+                }
+            ],
+        }
+        self.assertEqual(validate_schema(payload), [])
+
 
 class TestRunAll(unittest.TestCase):
     def test_clean_run_returns_empty(self):

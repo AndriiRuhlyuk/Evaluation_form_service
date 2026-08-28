@@ -115,19 +115,31 @@ def validate_schema(payload: dict) -> list[str]:
     for key in OUTPUT_SCHEMA["required"]:
         if key not in payload:
             problems.append(f"відсутній ключ верхнього рівня: {key}")
-    for value in payload.get("flipped_to_done", []):
-        if not isinstance(value, str):
-            problems.append(f"flipped_to_done містить не рядок: {value!r}")
-    for index, item in enumerate(payload.get("new_entries", [])):
-        if not isinstance(item, dict):
-            problems.append(f"new_entries[{index}] не об'єкт")
-            continue
-        for field, expected_type in OUTPUT_SCHEMA["entry_fields"].items():
-            if field not in item:
-                problems.append(f"new_entries[{index}] без поля {field}")
-            elif not isinstance(item[field], expected_type):
-                problems.append(
-                    f"new_entries[{index}].{field} має тип "
-                    f"{type(item[field]).__name__}, очікували {expected_type.__name__}"
-                )
+    flipped_to_done = payload.get("flipped_to_done")
+    if flipped_to_done is not None and not isinstance(flipped_to_done, list):
+        problems.append(
+            f"flipped_to_done має тип {type(flipped_to_done).__name__}, очікували list"
+        )
+    elif isinstance(flipped_to_done, list):
+        for value in flipped_to_done:
+            if not isinstance(value, str):
+                problems.append(f"flipped_to_done містить не рядок: {value!r}")
+    new_entries = payload.get("new_entries")
+    if new_entries is not None and not isinstance(new_entries, list):
+        problems.append(
+            f"new_entries має тип {type(new_entries).__name__}, очікували list"
+        )
+    elif isinstance(new_entries, list):
+        for index, item in enumerate(new_entries):
+            if not isinstance(item, dict):
+                problems.append(f"new_entries[{index}] не об'єкт")
+                continue
+            for field, expected_type in OUTPUT_SCHEMA["entry_fields"].items():
+                if field not in item:
+                    problems.append(f"new_entries[{index}] без поля {field}")
+                elif not isinstance(item[field], expected_type):
+                    problems.append(
+                        f"new_entries[{index}].{field} має тип "
+                        f"{type(item[field]).__name__}, очікували {expected_type.__name__}"
+                    )
     return problems
