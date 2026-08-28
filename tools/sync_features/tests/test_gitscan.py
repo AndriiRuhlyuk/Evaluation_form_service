@@ -1,6 +1,92 @@
 import unittest
 
-from gitscan import coverage_line, extract_ids, parse_log
+from gitscan import (
+    _process_git_result,
+    coverage_line,
+    extract_ids,
+    parse_log,
+    validate_iso_date,
+)
+
+
+class TestValidateIsoDate(unittest.TestCase):
+    def test_valid_iso_date(self):
+        # Should not raise for valid YYYY-MM-DD dates.
+        validate_iso_date("2026-08-28")
+        validate_iso_date("2000-01-01")
+        validate_iso_date("2099-12-31")
+
+    def test_invalid_format_short_year(self):
+        # Year must be 4 digits.
+        with self.assertRaises(ValueError):
+            validate_iso_date("26-08-28")
+
+    def test_invalid_format_two_digit_month(self):
+        # Month must be 2 digits with leading zero.
+        with self.assertRaises(ValueError):
+            validate_iso_date("2026-8-28")
+
+    def test_invalid_format_two_digit_day(self):
+        # Day must be 2 digits with leading zero.
+        with self.assertRaises(ValueError):
+            validate_iso_date("2026-08-8")
+
+    def test_invalid_format_wrong_separators(self):
+        # Must use hyphen separators.
+        with self.assertRaises(ValueError):
+            validate_iso_date("2026/08/28")
+
+    def test_invalid_format_no_separators(self):
+        # Must have separators.
+        with self.assertRaises(ValueError):
+            validate_iso_date("20260828")
+
+    def test_invalid_month_value(self):
+        # Month must be 01-12.
+        with self.assertRaises(ValueError):
+            validate_iso_date("2026-13-28")
+
+    def test_invalid_day_value(self):
+        # Day must be valid for the month.
+        with self.assertRaises(ValueError):
+            validate_iso_date("2026-02-30")
+
+    def test_empty_string(self):
+        # Empty string is invalid.
+        with self.assertRaises(ValueError):
+            validate_iso_date("")
+
+    def test_whitespace_only(self):
+        # Whitespace is invalid.
+        with self.assertRaises(ValueError):
+            validate_iso_date("   ")
+
+
+class TestProcessGitResult(unittest.TestCase):
+    def test_success_with_commits(self):
+        # Successful git run returns parsed commits.
+        stdout = "7a8598f Docs: щось\nb0086cf Fix: ARCH-5\n"
+        result = _process_git_result(0, stdout, "")
+        self.assertEqual(
+            result, [("7a8598f", "Docs: щось"), ("b0086cf", "Fix: ARCH-5")]
+        )
+
+    def test_success_no_commits(self):
+        # Successful git run with no commits returns empty list.
+        result = _process_git_result(0, "", "")
+        self.assertEqual(result, [])
+
+    def test_git_error_with_stderr(self):
+        # Non-zero exit code raises RuntimeError with stderr text.
+        stderr = "fatal: not a git repository (or any of the parent directories): .git"
+        with self.assertRaises(RuntimeError) as context:
+            _process_git_result(128, "", stderr)
+        self.assertIn(stderr, str(context.exception))
+
+    def test_git_error_no_stderr(self):
+        # Non-zero exit code raises RuntimeError even if stderr is empty.
+        with self.assertRaises(RuntimeError):
+            _process_git_result(1, "", "")
 
 
 class TestExtractIds(unittest.TestCase):
