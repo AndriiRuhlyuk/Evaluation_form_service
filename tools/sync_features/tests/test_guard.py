@@ -247,6 +247,32 @@ class TestPreToolUseHook(unittest.IsolatedAsyncioTestCase):
         output = result["hookSpecificOutput"]
         self.assertEqual(output["permissionDecision"], "deny")
 
+    async def test_broken_stderr_journal_matches_returned_decision(self):
+        # Обов'язок 1 (Task 6): раніше DECISIONS.append ішов ДО print у
+        # тому самому try, тому падіння print лишало в журналі запис ALLOW,
+        # хоча hook повернув deny. "git log -1" сам по собі був би ALLOW -
+        # якщо цей тест провалюється з verdict="ALLOW", стара помилка
+        # повернулась.
+        class BrokenStderr:
+            def write(self, _data):
+                raise OSError("stderr зламано")
+
+            def flush(self):
+                pass
+
+        with mock.patch("sys.stderr", BrokenStderr()):
+            result = await guard.pre_tool_use_hook(
+                {"tool_name": "Bash", "tool_input": {"command": "git log -1"}},
+                "tool-use-6",
+                {},
+            )
+        output = result["hookSpecificOutput"]
+        self.assertEqual(output["permissionDecision"], "deny")
+        self.assertEqual(len(guard.DECISIONS), 1)
+        tool_name, _, verdict = guard.DECISIONS[0]
+        self.assertEqual(tool_name, "Bash")
+        self.assertEqual(verdict, "DENY")
+
 
 class TestSelfCheck(unittest.TestCase):
     def test_self_check_passes_silently(self):

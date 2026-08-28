@@ -20,6 +20,16 @@ Fix round 2: (1) шар 2 з round 1 перевіряв лише токени, �
 `print`/`.append` вибивало виняток із hook, і SDK не отримувало жодного
 рішення. (3) `.git/services.py` проходив як "рівно один /", хоча каталог
 службовий.
+
+Fix round 3 (Task 6, обов'язок 1): `DECISIONS.append` у попередній версії
+відбувався ВСЕРЕДИНІ `try`, ДО `print`. Якщо `print` падав (наприклад
+зламаний stderr), виняток ловився в `except`, hook повертав deny, але
+журнал уже встиг записати ALLOW - до винятку. `DECISIONS` - єдиний доказ у
+звіті `sync_features.py`, що пісочниця реально працювала під час запуску;
+журнал, що бреше, гірший за відсутність журналу. Тепер `tool_name` і
+`tool_input` читаються безпечно ДО `try` (без ризику винятку), а
+`DECISIONS.append` відбувається ПІСЛЯ `try/except` - завжди з фінальним
+`allowed`, яке й повертається SDK.
 """
 
 import os
@@ -172,20 +182,32 @@ async def pre_tool_use_hook(input_data, tool_use_id, context) -> dict:
     логування, тому падіння `print` чи `.append` вибивало виняток із hook
     без жодного результату: SDK ловить його сам, і CLI не отримує ні allow,
     ні deny. Тепер будь-який збій на будь-якому кроці перетворюється на deny.
+
+    Fix round 3 (Task 6, обов'язок 1): `DECISIONS.append` перенесено ПІСЛЯ
+    `try/except`, щоб журнал завжди відображав ФІНАЛЬНЕ `allowed` - те саме,
+    що йде в повернене hookSpecificOutput. Раніше запис лягав у DECISIONS
+    ДО print, тому падіння print лишало в журналі ALLOW, хоча SDK реально
+    отримувало deny. `tool_name`/`tool_input` читаються safe-геттерами до
+    try, бо сам `input_data.get(...)` може впасти, якщо input_data не dict
+    (наприклад None) - це не повинно завадити журналу зафіксувати рішення.
     """
+    tool_name = input_data.get("tool_name", "") if isinstance(input_data, dict) else ""
+    tool_input = (
+        input_data.get("tool_input", {}) if isinstance(input_data, dict) else {}
+    )
+
     try:
-        tool_name = input_data.get("tool_name", "")
-        tool_input = input_data.get("tool_input", {})
         allowed, reason = guard_decision(tool_name, tool_input)
-        DECISIONS.append(
-            (tool_name, repr(tool_input)[:120], "ALLOW" if allowed else "DENY")
-        )
         print(
             f"[guard] {'ALLOW' if allowed else 'DENY '} {tool_name} - {reason}",
             file=sys.stderr,
         )
     except Exception as exc:  # межа безпеки: будь-який збій -> deny, без винятку
         allowed, reason = False, f"охоронець впав з винятком: {exc!r}"
+
+    DECISIONS.append(
+        (tool_name, repr(tool_input)[:120], "ALLOW" if allowed else "DENY")
+    )
 
     return {
         "hookSpecificOutput": {
