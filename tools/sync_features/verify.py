@@ -1,3 +1,4 @@
+import itertools
 import json
 import re
 
@@ -52,22 +53,66 @@ def check_descriptions_intact(
     return True, "описи наявних записів не змінені"
 
 
+def _ids_from_strings(items: object) -> set[str]:
+    """id зі списку рядків, стійко до кривої форми.
+
+    `isinstance(items, list)` тут не педантизм: `set("ARCH-5")` дає шість
+    ОДНОСИМВОЛЬНИХ "id" замість нуля, і на error-шляхах журналу (де payload
+    ще не бачив `validate_schema`) це надувало б рядок покриття.
+    """
+    if not isinstance(items, list):
+        return set()
+    return {value for value in items if isinstance(value, str)}
+
+
+def _ids_from_objects(items: object) -> set[str]:
+    """id зі списку об'єктів, стійко до кривої форми.
+
+    `mentioned_ids` викликається і з ранніх error-шляхів `_write_journal`, де
+    payload ще не проходив `validate_schema`. Рахівник покриття не має права
+    падати на тому, що є роботою валідатора схеми: не список - порожньо, не
+    об'єкт - пропустити, id не рядок - пропустити.
+    """
+    if not isinstance(items, list):
+        return set()
+    found: set[str] = set()
+    for item in items:
+        if isinstance(item, dict) and isinstance(item.get("id"), str):
+            found.add(item["id"])
+    return found
+
+
 def mentioned_ids(payload: dict) -> set[str]:
-    """Усі id фіч, згадані у відповіді агента: об'єднання двох джерел -
-    `flipped_to_done` і id нових записів у `new_entries`.
+    """Усі id фіч, згадані у відповіді агента: об'єднання ТРЬОХ джерел -
+    `flipped_to_done`, id нових записів у `new_entries` і id у
+    `left_unchanged`.
 
     Task 6, fix round 1, Fix 7: раніше `check_coverage` і `sync_features.py`
     рахували цей самий union кожен окремо - два копії однієї логіки в різних
     файлах, одна з яких (у обгортці) не покрита тестами і могла тихо
     розійтись із цією. Тепер обидва місця викликають цю функцію.
+
+    Task 7, fix round 5: третє джерело. Раніше union складався лише зі ЗМІН,
+    тому агент, який чесно нічого не змінив, не мав ЖОДНОГО способу згадати
+    id - і I4 спрацьовував на кожному реалістичному прогоні.
     """
-    mentioned = set(payload.get("flipped_to_done", []))
-    mentioned |= {item["id"] for item in payload.get("new_entries", []) if "id" in item}
+    mentioned = _ids_from_strings(payload.get("flipped_to_done"))
+    mentioned |= _ids_from_objects(payload.get("new_entries"))
+    mentioned |= _ids_from_objects(payload.get("left_unchanged"))
     return mentioned
 
 
 def check_coverage(commits: list[tuple[str, str]], payload: dict) -> tuple[bool, str]:
-    """I4: кожен id із комітлогу присутній у відповіді агента."""
+    """I4: кожен id із комітлогу ВРАХОВАНИЙ у відповіді агента - у будь-якому
+    з трьох списків.
+
+    Task 7, fix round 5: сенс інваріанта не змінився ("не пропусти коміт
+    мовчки"), змінилось те, ЧИМ агент може його задовольнити. До цього раунду
+    відповідь мала місце лише для ЗМІН, а промпт вимагав від агента не чіпати
+    неоднозначні коміти - дві взаємно нездійсненні вимоги, через які I4 падав
+    на кожному чесному прогоні. Тепер "розглянув і свідомо лишив як є" - теж
+    відповідь, і I4 знову розрізняє добрий прогін від поганого.
+    """
     mentioned = mentioned_ids(payload)
     from_commits: set[str] = set()
     for _, subject in commits:
@@ -97,7 +142,7 @@ def run_all(
 
 
 OUTPUT_SCHEMA = {
-    "required": ("flipped_to_done", "new_entries"),
+    "required": ("flipped_to_done", "new_entries", "left_unchanged"),
     "entry_fields": {
         "id": str,
         "category": str,
@@ -105,6 +150,15 @@ OUTPUT_SCHEMA = {
         "description": str,
         "done": bool,
     },
+    # Task 7, fix round 5: третє поле. Форма навмисно мінімальна - id і
+    # причина. Причина - ВІЛЬНИЙ ТЕКСТ, не закритий перелік кодів: закритий
+    # перелік не рятує від вакуумного задоволення I4 (агент однаково обере
+    # найближчий кошик для всього), зате мовчки спотворює випадок, якого
+    # перелік не передбачив. Виміряна причина наразі рівно одна ("коміт
+    # `Docs:` фіксує знахідку, а не реалізує її"), і проєктувати словник з
+    # n=1 - вгадування. Промпт НАЗИВАЄ типові причини як підказку; схема їх
+    # не заморожує.
+    "unchanged_fields": {"id": str, "reason": str},
 }
 
 
@@ -252,4 +306,68 @@ def validate_schema(payload: dict) -> list[str]:
                             f"new_entries[{index}].{field} має тип "
                             f"{type(item[field]).__name__}, очікували {expected_type.__name__}"
                         )
+    problems += _validate_left_unchanged(payload)
+    problems += _check_dispositions_disjoint(payload)
+    return problems
+
+
+def _validate_left_unchanged(payload: dict) -> list[str]:
+    """Форма третього поля: список об'єктів `{id: str, reason: str}`.
+
+    `reason` мусить бути НЕПОРОЖНІМ після `strip()`. Це межа між структурною
+    і семантичною перевіркою, і вона тут навмисна: схема не вміє відрізнити
+    змістовну причину від "n/a", але вміє відхилити відсутність причини
+    взагалі - найдешевшу форму того, щоб задовольнити I4, нічого не
+    подумавши. Порогу на довжину немає свідомо: "не коротше 10 символів" має
+    вигляд перевірки, не будучи нею ("n/a n/a n/a" проходить будь-який поріг).
+    """
+    if "left_unchanged" not in payload:
+        return []
+    problems: list[str] = []
+    left_unchanged = payload["left_unchanged"]
+    if not isinstance(left_unchanged, list):
+        return [
+            f"left_unchanged має тип {type(left_unchanged).__name__}, очікували list"
+        ]
+    for index, item in enumerate(left_unchanged):
+        if not isinstance(item, dict):
+            problems.append(f"left_unchanged[{index}] не об'єкт")
+            continue
+        for field, expected_type in OUTPUT_SCHEMA["unchanged_fields"].items():
+            if field not in item:
+                problems.append(f"left_unchanged[{index}] без поля {field}")
+            elif not isinstance(item[field], expected_type):
+                problems.append(
+                    f"left_unchanged[{index}].{field} має тип "
+                    f"{type(item[field]).__name__}, очікували {expected_type.__name__}"
+                )
+        reason = item.get("reason")
+        if isinstance(reason, str) and not reason.strip():
+            problems.append(f"left_unchanged[{index}].reason порожній")
+    return problems
+
+
+def _check_dispositions_disjoint(payload: dict) -> list[str]:
+    """Три списки - три ВЗАЄМОВИКЛЮЧНІ розпорядження одним id.
+
+    Той самий id у двох списках - самосуперечність: "я перемкнув цей запис і
+    я його не чіпав", або "я створив новий запис і водночас перемкнув наявний
+    із тим самим id". Інваріанти I2/I3 читають ФАЙЛ, а не цей JSON; єдина
+    робота JSON - бути достовірним звітом про те, що записано у файл, і
+    суперечливий звіт цю роботу не виконує. Побічно це закриває найгрубіший
+    спосіб зловжити третім полем - висипати всі id у `left_unchanged` "про
+    всяк випадок" ПОВЕРХ тих, які реально змінено.
+
+    Повтор усередині ОДНОГО списку суперечністю не є (лише неохайність), і
+    тут не перевіряється: I4 однаково працює з множинами.
+    """
+    lists = {
+        "flipped_to_done": _ids_from_strings(payload.get("flipped_to_done")),
+        "new_entries": _ids_from_objects(payload.get("new_entries")),
+        "left_unchanged": _ids_from_objects(payload.get("left_unchanged")),
+    }
+    problems: list[str] = []
+    for left, right in itertools.combinations(lists, 2):
+        for id_ in sorted(lists[left] & lists[right]):
+            problems.append(f"{id_} присутній і в {left}, і в {right}")
     return problems

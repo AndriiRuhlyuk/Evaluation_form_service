@@ -153,6 +153,18 @@ BROKEN_MAX_TURNS = 1
 # продуктовому промпті. Текст тепер прямо каже: робоча директорія агента
 # - корінь репозиторію, реєстр - РІВНО `Features_list.json` відносним
 # рядком, без здогадок.
+#
+# Fix round 5 (Task 7): промпт і схема суперечили одне одному. Промпт казав
+# "якщо коміт неоднозначний - лиши його і НЕ згадуй про нього", а I4 вимагав,
+# щоб КОЖЕН id з комітлогу був у відповіді - при тому що у відповіді було
+# місце лише для ЗМІН. Перший успішний наскрізний прогін це й показав: агент
+# правильно не змінив нічого за Docs-комітами (ARCH-20, ARCH-23, ARCH-24,
+# CFG-1, CFG-2 - коміти, що ФІКСУЮТЬ знахідку, а не реалізують її), повернув
+# порожні списки і дістав exit 2. Вердикт, що спрацьовує на кожному чесному
+# прогоні, несе стільки ж інформації, скільки той, що не спрацьовує ніколи -
+# та сама патологія, яку цей проєкт уже лікував у пробі пісочниці. Тепер
+# промпт вимагає ВРАХУВАТИ id, а не ЗМІНИТИ його: "leave it alone" лишилось,
+# "say nothing about it" замінено на третій список `left_unchanged`.
 PROMPT = """\
 You are auditing a feature registry against git history.
 
@@ -176,6 +188,14 @@ Workflow:
    b. a commit describes work that has no entry in the registry at all.
 4. Edit `Features_list.json`: flip "done" to true for case (a), and append
    new entries for case (b) using the next free id in the right series.
+5. Account for EVERY feature id you saw in those commit subjects. Each id
+   must land in exactly ONE of the three lists below - never in two of them.
+   Ids you actually changed go in "flipped_to_done" or "new_entries"; every
+   other id goes in "left_unchanged" together with a short reason why you
+   did not change it. Typical reasons: the commit only records or documents
+   a finding rather than implementing it; the entry is already "done": true;
+   the commit text is too ambiguous to judge. Write the reason that is
+   actually true for that id, not the nearest slogan.
 
 Hard constraints - violating any of these fails the run:
 - NEVER delete an existing entry.
@@ -185,8 +205,12 @@ Hard constraints - violating any of these fails the run:
   flip "done" on existing entries, and append new ones.
 - NEVER edit any file other than `Features_list.json`.
 - NEVER run git commands other than `git log`. Do not commit, do not push.
-- If a commit is ambiguous, leave it alone and say nothing about it. A
-  missed discrepancy is cheap; a wrong edit to the registry is not.
+- If a commit is ambiguous, DO NOT edit the registry for it. A missed
+  discrepancy is cheap; a wrong edit to the registry is not - when in
+  doubt, do nothing. Inaction is still the right call, but it must be
+  reported, never silent: put the id in "left_unchanged" with its reason.
+  Editing on a guess and dropping an id from the answer entirely are two
+  separate failures, and you must avoid both.
 
 Return ONLY JSON matching exactly this shape - no sentence before it, no
 sentence after it, no markdown fence around it, nothing else on any line:
@@ -195,9 +219,16 @@ sentence after it, no markdown fence around it, nothing else on any line:
   "new_entries": [
     {"id": "ARCH-28", "category": "arch", "name": "...",
      "description": "...", "done": true}
+  ],
+  "left_unchanged": [
+    {"id": "ARCH-23",
+     "reason": "commit records the finding, does not report it fixed"}
   ]
 }
-The JSON must mirror the edits you actually wrote into the file.
+All three keys are required; use an empty list when a list has no members.
+"flipped_to_done" and "new_entries" must mirror the edits you actually wrote
+into the file. "left_unchanged" must list the ids you deliberately did not
+write, and no reason may be empty.
 """
 
 # R5: свідомо зіпсований промпт для доказу обробки помилок. Використовується,
