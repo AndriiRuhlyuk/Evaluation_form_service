@@ -182,6 +182,53 @@ class TestUnknownTools(unittest.TestCase):
         self.assertFalse(allowed)
 
 
+class TestActionableDenialReasons(unittest.TestCase):
+    """Fix H2 (Task 7, ревʼю раунд 3): DENY-причини мусять називати
+    ПРИЙНЯТНУ форму, не лише скаржитись на неприйнятну - reader цього
+    рядка не людина, а сам агент у control loop, що обирає наступну дію
+    зі слів причини. Контролер виміряв живий прогін продукту, де агент
+    отримав "шлях порожній, невалідний або поза коренем репозиторію" три
+    рази поспіль і жодного разу не здогадався сам, яка форма прийнятна.
+
+    Кожен тест тут - ЛИШЕ перевірка тексту `reason`; жоден не перевіряє
+    `allowed` по-новому - те, що рішення не зрушилось, доведено окремо в
+    `TestBashRules`/`TestReadRules`/`TestEditRules` вище, які не змінені
+    цим фіксом і лишаються зеленими."""
+
+    def test_read_invalid_path_reason_names_accepted_form(self):
+        allowed, reason = guard_decision("Read", {"file_path": ""})
+        self.assertFalse(allowed)
+        self.assertIn("Features_list.json", reason)
+        self.assertIn("відносно кореня репозиторію", reason)
+
+    def test_read_disallowed_path_reason_names_accepted_alternatives(self):
+        allowed, reason = guard_decision("Read", {"file_path": ".env"})
+        self.assertFalse(allowed)
+        self.assertIn("Features_list.json", reason)
+        self.assertIn("services.py", reason)
+
+    def test_bash_wrong_prefix_reason_names_accepted_form(self):
+        allowed, reason = guard_decision("Bash", {"command": "pwd"})
+        self.assertFalse(allowed)
+        self.assertIn("git log", reason)
+        self.assertIn("білого списку", reason)
+
+    def test_bash_forbidden_char_reason_names_accepted_form(self):
+        allowed, reason = guard_decision("Bash", {"command": "git log; pwd"})
+        self.assertFalse(allowed)
+        self.assertIn("git log", reason)
+
+    def test_bash_bad_option_reason_names_examples(self):
+        allowed, reason = guard_decision("Bash", {"command": "git log --all"})
+        self.assertFalse(allowed)
+        self.assertIn("--oneline", reason)
+
+    def test_bash_bad_positional_reason_names_charset(self):
+        allowed, reason = guard_decision("Bash", {"command": "git log services.py!!!"})
+        self.assertFalse(allowed)
+        self.assertIn("буквено-цифрові", reason)
+
+
 class TestPreToolUseHook(unittest.IsolatedAsyncioTestCase):
     """M4: hook, DECISIONS і форма hookSpecificOutput раніше не мали тестів."""
 

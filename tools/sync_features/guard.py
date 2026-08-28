@@ -69,6 +69,14 @@ _ALLOWED_OPT_PREFIXES = (
 # шляхів у цьому репозиторії. Усе поза цим - відмова.
 _SAFE_POSITIONAL = re.compile(r"^[A-Za-z0-9._/~^-]+$")
 
+# Fix H2 (Task 7, ревʼю раунд 3): спільний хвіст для КОЖНОЇ Bash-DENY-
+# причини. Reader цих рядків - не людина, а агент у control loop, що
+# обирає наступну дію зі слів причини; підказка називає ПРИЙНЯТНУ форму,
+# не послаблюючи саме правило (рішення не змінюється, лише пояснення).
+_BASH_ACCEPTED_HINT = (
+    "дозволено лише 'git log' з опціями та аргументами з білого списку"
+)
+
 # Корінь репозиторію: guard.py лежить у tools/sync_features/, тому два рівні
 # вгору від його директорії - корінь (де лежить Features_list.json).
 _GUARD_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -94,27 +102,53 @@ def _check_bash(command: str) -> tuple[bool, str]:
     списку або безпечний ref/шлях. Нічого не проходить «за замовчуванням» -
     round 1 валідував лише токени, що починаються з "-", і позиційний токен
     з ANSI-C quoting ($'\\x2d\\x2doutput=...') минав перевірку саме тому, що
-    після розкриття bash-ом не виглядав як опція."""
+    після розкриття bash-ом не виглядав як опція.
+
+    Fix H2 (Task 7, ревʼю раунд 3): кожна DENY-причина тепер закінчується
+    `_BASH_ACCEPTED_HINT` - те саме твердження, "дозволено лише 'git log' з
+    опціями та аргументами з білого списку", повторюється в КОЖНІЙ причині
+    цієї функції. Контролер виміряв живий прогін продукту, де агент
+    отримував "команда не починається з 'git log'" п'ять разів поспіль на
+    Read (інша гілка guard_decision, той самий клас проблеми) і щоразу
+    вигадував новий здогад замість того, щоб зрозуміти правило одразу.
+    Reader цього рядка - не людина, що читає постмортем, а сам агент, що
+    обирає наступну дію зі СЛІВ причини - підказка не послаблює межу
+    (правило те саме), лише закінчує його здогадку в один хід.
+    """
     # шар 1: заборонені символи на сирому рядку, до розбору
     for bad in _FORBIDDEN_SUBSTRINGS:
         if bad in command:
-            return False, f"команда містить заборонений символ {bad!r}"
+            return (
+                False,
+                f"команда містить заборонений символ {bad!r} - {_BASH_ACCEPTED_HINT}",
+            )
 
     # шар 2: токенізація і перевірка КОЖНОГО токена, не лише опційних
     try:
         tokens = shlex.split(command)
     except ValueError as exc:
-        return False, f"команду не вдалось розібрати: {exc}"
+        return False, f"команду не вдалось розібрати ({exc}) - {_BASH_ACCEPTED_HINT}"
 
     if len(tokens) < 2 or tokens[0] != "git" or tokens[1] != "log":
-        return False, f"команда {command!r} не починається з 'git log'"
+        return (
+            False,
+            f"команда {command!r} не починається з 'git log' - {_BASH_ACCEPTED_HINT}",
+        )
 
     for token in tokens[2:]:
         if token.startswith("-"):
             if not _is_allowed_git_log_option(token):
-                return False, f"опція {token!r} поза білим списком git log"
+                return False, (
+                    f"опція {token!r} поза білим списком git log - дозволено "
+                    "опції в дусі --oneline, --no-merges, --since=DATE, "
+                    "--format=FMT, -N (число)"
+                )
         elif not _SAFE_POSITIONAL.match(token):
-            return False, f"аргумент {token!r} не відповідає безпечному патерну"
+            return False, (
+                f"аргумент {token!r} не відповідає безпечному патерну - "
+                "дозволені лише буквено-цифрові символи, крапка, слеш, "
+                "тильда, дефіс і каре (^)"
+            )
 
     return True, "git log з опціями та аргументами з білого списку"
 
@@ -148,6 +182,17 @@ def _is_services_path(path: str) -> bool:
 
 
 def guard_decision(tool_name: str, tool_input: dict) -> tuple[bool, str]:
+    """Fix H2 (Task 7, ревʼю раунд 3): DENY-причини для `Read` тепер
+    називають ПРИЙНЯТНУ форму, не лише скаржаться на неприйнятну. Контролер
+    виміряв живий прогін продукту (не проби): агент отримав "шлях порожній,
+    невалідний або поза коренем репозиторію" три рази поспіль і "поза
+    списком читабельних" ще двічі, вигадуючи новий шлях щоразу замість
+    того, щоб зрозуміти правило одразу, - 17 із 20 ходів бюджету пішли на
+    здогадки, і аналіз/edit не встигли статись. Причина - INPUT ДЛЯ CONTROL
+    LOOP АГЕНТА, не лог для людини: агент обирає наступну дію зі слів
+    причини. Називання прийнятної форми НЕ послаблює межу - рішення
+    (`allowed`) тут не змінилось узагалі, змінився лише текст `reason`.
+    """
     if not isinstance(tool_input, dict):
         return False, "tool_input не є словником"
 
@@ -160,10 +205,17 @@ def guard_decision(tool_name: str, tool_input: dict) -> tuple[bool, str]:
     if tool_name == "Read":
         path = _normalised(tool_input)
         if path is None:
-            return False, "шлях порожній, невалідний або поза коренем репозиторію"
+            return False, (
+                "шлях порожній, невалідний або поза коренем репозиторію - "
+                "використайте шлях відносно кореня репозиторію (він же "
+                "поточна робоча директорія), наприклад 'Features_list.json'"
+            )
         if path == REGISTRY_PATH or _is_services_path(path):
             return True, f"{path} у списку читабельних"
-        return False, f"{path} поза списком читабельних"
+        return False, (
+            f"{path} поза списком читабельних - дозволено лише "
+            f"{REGISTRY_PATH} або '<app>/services.py'"
+        )
 
     if tool_name == "Edit":
         path = _normalised(tool_input)

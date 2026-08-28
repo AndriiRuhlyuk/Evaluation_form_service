@@ -57,6 +57,23 @@ process_note=...)` на КОЖНОМУ шляху - аномалія проце�
 байти, лишені агентом у `Features_list.json`, більше не підіймають
 `UnicodeDecodeError` усередині шляху, яким `persist()` рятує журнал саме
 на "агент зіпсував реєстр".
+
+Task 7, ревʼю раунд 3 (Finding H): контролер запустив `make run` наживо і
+виміряв, що агент витратив ~17 із 20 ходів на здогадки форми шляху для
+`Read`, жодного разу не дійшовши до аналізу чи `Edit` - сам guard
+відпрацював правильно кожного разу, проблема була в тому, ЯК агент шукав
+прийнятну форму. H1 - `PROMPT` тепер прямо називає робочу директорію
+коренем репозиторію і РІВНО рядок `Features_list.json` для `file_path`,
+той самий фікс, що вже стояв у `probe_sandbox.py` (Fix F) для проби, але
+ніколи не потрапляв у продуктовий промпт. H2 - DENY-причини `guard.py`
+(`guard_decision`, `_check_bash`) тепер називають ПРИЙНЯТНУ форму, не лише
+скаржаться на неприйнятну - reader цих рядків не людина, а сам агент у
+control loop, що обирає наступну дію зі слів причини; саме рішення
+(`allowed`) ніде не змінилось, лише текст `reason`. H3 - `MAX_TURNS`
+підняли з 20 до 40: навіть без витраченого на здогадки бюджету, реальна
+робота (git log + Read 79-записового реєстру + до кільканадцяти окремих
+Edit-викликів + фінальна JSON-відповідь) потребує запасу, якого 20 не
+лишало.
 """
 
 import asyncio
@@ -81,25 +98,51 @@ import guard
 import verify
 
 # R3a: явна константа замість літерала в ClaudeAgentOptions(...). Задача
-# структурна (read -> transform -> write за схемою), тому запас у 20 turns
-# лишає місце на "git log" + "Read" + кілька "Edit" без ризику зациклення.
-MAX_TURNS = 20
+# структурна (read -> transform -> write за схемою): git log + Read
+# 79-записового реєстру + до кільканадцяти окремих Edit-викликів (кожен
+# перемикач "done" і кожен новий запис - типово свій виклик Edit, не один
+# на всю правку) + фінальна JSON-відповідь.
+#
+# Fix H3 (Task 7, ревʼю раунд 3): 20 виявилось замало НАВІТЬ без витрати
+# ходів на угадування шляху (H1/H2 закрили це окремо) - контролер виміряв
+# живий прогін продукту, де сам аналіз і edit не встигли статись до
+# вичерпання бюджету. 40 - подвоєння попереднього запасу: git log (1) +
+# Read реєстру (1) + запас на ~15 окремих Edit-викликів + фінальна
+# відповідь, з невеликим запасом на випадкові відновлювані помилки. Якщо
+# H1/H2 спрацювали, реальна робота вкладеться в набагато менше ходів, а
+# будь-яка залишкова нестача виявиться чистим `error_max_turns`, а не
+# блуканням.
+MAX_TURNS = 40
 
 # Fix 3 (fix round 1): окремий, значно вужчий бюджет для R5. Зламаний промпт
 # просить неможливе (прочитати неіснуючий файл поза репозиторієм); з
-# MAX_TURNS=20 агент після відмови охоронця чемно звітує "не можу виконати",
-# і query() завершується is_error=False - помилка ловиться лише на кроці
+# MAX_TURNS агент після відмови охоронця чемно звітує "не можу виконати", і
+# query() завершується is_error=False - помилка ловиться лише на кроці
 # парсингу JSON, а не на is_error, хоча саме is_error і є вимогою R5.
 # BROKEN_MAX_TURNS=1 змушує біжати до вичерпання бюджету ходів
 # (subtype="error_max_turns") - це СПРАВЖНЯ SDK-помилка з is_error=True, і
 # заразом видимий доказ, що R3a-кап реально щось обмежує, а не просто
-# лежить константою.
+# лежить константою. Не залежить від H3 (MAX_TURNS вище) - лишається 1
+# незалежно від того, наскільки широкий звичайний бюджет.
 BROKEN_MAX_TURNS = 1
 
+# Fix H1 (Task 7, ревʼю раунд 3): та сама знахідка, що вже закрита в
+# probe_sandbox.py (READ_PROMPT/EDIT_PROMPT, Fix F) - PROMPT продукту
+# ніколи не отримував того самого фіксу. Контролер виміряв живий прогін
+# `make run`, де агент витратив ~17 з 20 ходів на здогадки форми шляху
+# (t=7, t=13, t=19 - Read DENY "шлях порожній, невалідний або поза коренем
+# репозиторію"; ALLOW лише на t=24, коли бюджет уже вичерпувався) - точно
+# та сама поведінка, яку Finding F вимірив і закрив у пробі, лише в
+# продуктовому промпті. Текст тепер прямо каже: робоча директорія агента
+# - корінь репозиторію, реєстр - РІВНО `Features_list.json` відносним
+# рядком, без здогадок.
 PROMPT = """\
 You are auditing a feature registry against git history.
 
-The registry is `Features_list.json` at the repository root. Its shape is:
+Your current working directory IS the repository root. The registry is at
+exactly this path, relative to your working directory: `Features_list.json`
+- no other form, no absolute path, no directory prefix. Pass that exact
+string as file_path to Read and to Edit. Its shape is:
 {"project": str, "updated": "YYYY-MM-DD", "legend": {...}, "features": [...]}
 Each feature is {"id", "category", "name", "description", "done"}.
 
@@ -108,7 +151,8 @@ QA, AI, LD, FN, ARCH, CFG, FE. The next free ARCH id is ARCH-28.
 
 Workflow:
 1. Run `git log --oneline -40` to read recent commit subjects.
-2. Read `Features_list.json` to learn the current state of the registry.
+2. Read `Features_list.json` (the exact relative path above) to learn the
+   current state of the registry.
 3. Find two kinds of discrepancy:
    a. a commit says a feature id was implemented or fixed, but that entry
       still has "done": false;
