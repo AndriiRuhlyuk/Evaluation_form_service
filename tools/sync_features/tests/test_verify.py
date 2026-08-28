@@ -5,7 +5,9 @@ from verify import (
     check_descriptions_intact,
     check_no_id_lost,
     check_parses,
+    parse_agent_json,
     run_all,
+    validate_schema,
 )
 
 
@@ -96,6 +98,87 @@ class TestI4Coverage(unittest.TestCase):
         payload = {"flipped_to_done": [], "new_entries": [{"id": "CFG-1"}]}
         ok, _ = check_coverage(commits, payload)
         self.assertTrue(ok)
+
+    def test_multiple_ids_in_one_commit(self):
+        commits = [
+            (
+                "7f6861e",
+                "Docs: ARCH-20..22, CFG-1, CFG-2 - знахідки з роботи над чеклістом релізу",
+            )
+        ]
+        payload = {"flipped_to_done": ["ARCH-20", "CFG-1", "CFG-2"], "new_entries": []}
+        ok, _ = check_coverage(commits, payload)
+        self.assertTrue(ok)
+
+    def test_multiple_ids_one_missing(self):
+        commits = [
+            (
+                "7f6861e",
+                "Docs: ARCH-20..22, CFG-1, CFG-2 - знахідки з роботи над чеклістом релізу",
+            )
+        ]
+        payload = {"flipped_to_done": ["ARCH-20", "CFG-1"], "new_entries": []}
+        ok, reason = check_coverage(commits, payload)
+        self.assertFalse(ok)
+        self.assertIn("CFG-2", reason)
+
+
+class TestParseAgentJson(unittest.TestCase):
+    def test_plain_json(self):
+        payload, _ = parse_agent_json('{"flipped_to_done": [], "new_entries": []}')
+        self.assertEqual(payload, {"flipped_to_done": [], "new_entries": []})
+
+    def test_fenced_json(self):
+        raw = '```json\n{"flipped_to_done": [], "new_entries": []}\n```'
+        payload, _ = parse_agent_json(raw)
+        self.assertIsNotNone(payload)
+
+    def test_prose_returns_none(self):
+        payload, reason = parse_agent_json("Я подивився історію і думаю, що…")
+        self.assertIsNone(payload)
+        self.assertIn("JSON", reason)
+
+
+class TestValidateSchema(unittest.TestCase):
+    def test_valid(self):
+        payload = {
+            "flipped_to_done": ["ARCH-5"],
+            "new_entries": [
+                {
+                    "id": "ARCH-28",
+                    "category": "ARCH",
+                    "name": "н",
+                    "description": "о",
+                    "done": False,
+                }
+            ],
+        }
+        self.assertEqual(validate_schema(payload), [])
+
+    def test_missing_top_level_key(self):
+        self.assertTrue(validate_schema({"flipped_to_done": []}))
+
+    def test_flipped_must_be_strings(self):
+        self.assertTrue(validate_schema({"flipped_to_done": [5], "new_entries": []}))
+
+    def test_new_entry_missing_field(self):
+        payload = {"flipped_to_done": [], "new_entries": [{"id": "ARCH-28"}]}
+        self.assertTrue(validate_schema(payload))
+
+    def test_new_entry_done_must_be_bool(self):
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [
+                {
+                    "id": "ARCH-28",
+                    "category": "ARCH",
+                    "name": "н",
+                    "description": "о",
+                    "done": "false",
+                }
+            ],
+        }
+        self.assertTrue(validate_schema(payload))
 
 
 class TestRunAll(unittest.TestCase):

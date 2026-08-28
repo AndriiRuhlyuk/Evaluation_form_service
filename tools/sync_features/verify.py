@@ -80,3 +80,54 @@ def run_all(
         if not ok:
             violations.append(reason)
     return violations
+
+
+OUTPUT_SCHEMA = {
+    "required": ("flipped_to_done", "new_entries"),
+    "entry_fields": {
+        "id": str,
+        "category": str,
+        "name": str,
+        "description": str,
+        "done": bool,
+    },
+}
+
+
+def parse_agent_json(raw: str) -> tuple[dict | None, str]:
+    """Розібрати відповідь агента, знявши можливу ```json обгортку."""
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.removeprefix("```json").removeprefix("```").removesuffix("```")
+        text = text.strip()
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return None, f"агент повернув не JSON: {exc}"
+    if not isinstance(payload, dict):
+        return None, "агент повернув JSON, але не об'єкт"
+    return payload, "розібрано"
+
+
+def validate_schema(payload: dict) -> list[str]:
+    """Порушення схеми. Порожній список = схема дотримана."""
+    problems: list[str] = []
+    for key in OUTPUT_SCHEMA["required"]:
+        if key not in payload:
+            problems.append(f"відсутній ключ верхнього рівня: {key}")
+    for value in payload.get("flipped_to_done", []):
+        if not isinstance(value, str):
+            problems.append(f"flipped_to_done містить не рядок: {value!r}")
+    for index, item in enumerate(payload.get("new_entries", [])):
+        if not isinstance(item, dict):
+            problems.append(f"new_entries[{index}] не об'єкт")
+            continue
+        for field, expected_type in OUTPUT_SCHEMA["entry_fields"].items():
+            if field not in item:
+                problems.append(f"new_entries[{index}] без поля {field}")
+            elif not isinstance(item[field], expected_type):
+                problems.append(
+                    f"new_entries[{index}].{field} має тип "
+                    f"{type(item[field]).__name__}, очікували {expected_type.__name__}"
+                )
+    return problems
