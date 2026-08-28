@@ -128,9 +128,11 @@ class TestWriteJournal(unittest.TestCase):
     """`_write_journal` - чиста I/O-функція без `query()`, тому TDD-exempt
     з докстрінга модуля її не стосується. Покриває Fix A2 (Task 7,
     `## Покриття` повернуто в звіт), Fix A3 (`## Аномалії процесу`),
-    Fix A4 (`errors="replace"` на биті байти реєстру) і Fix E (ревʼю
+    Fix A4 (`errors="replace"` на биті байти реєстру), Fix E (ревʼю
     раунд 1: обрізання `shown` переїхало сюди, з `guard.py`, і
-    застосовується лише до тексту звіту, не до `guard.DECISIONS`)."""
+    застосовується лише до тексту звіту, не до `guard.DECISIONS`) і Fix I1
+    (ревʼю раунд 4: `## Сира відповідь агента` - лише коли `raw_agent_text`
+    передано явно, з видимою міткою обрізання на довгому тексті)."""
 
     def setUp(self):
         guard.DECISIONS.clear()
@@ -273,6 +275,52 @@ class TestWriteJournal(unittest.TestCase):
         self.assertEqual(len(result), 120)
         self.assertTrue(result.endswith("..."))
         self.assertEqual(result, "x" * 117 + "...")
+
+    def test_raw_agent_text_section_absent_by_default(self):
+        # Fix I1 (Task 7, ревʼю раунд 4): на успішному шляху payload уже
+        # несе всю інформацію - секція з сирим текстом не мусить з'явитись,
+        # якщо викликач не передав raw_agent_text явно.
+        sync_features._write_journal(
+            self.out_dir,
+            self.registry_path,
+            '{"features": []}',
+            "2026-08-29-000000",
+            "успішно",
+            [],
+        )
+        report = self._report_text()
+        self.assertNotIn("## Сира відповідь агента", report)
+
+    def test_raw_agent_text_section_present_on_parse_failure(self):
+        # Контролер виміряв живий прогін, де ## JSON агента лишився
+        # порожнім ("відсутній - ...") після провалу парсингу - прогін
+        # коштував гроші й час, і не лишив нічого для діагностики. Секція
+        # з сирим текстом - єдине джерело правди саме в цьому випадку.
+        raw_text = "Here is my analysis: I found no discrepancies to report."
+        sync_features._write_journal(
+            self.out_dir,
+            self.registry_path,
+            '{"features": []}',
+            "2026-08-29-000000",
+            "JSON агента не розпарсився: агент повернув не JSON",
+            [],
+            raw_agent_text=raw_text,
+        )
+        report = self._report_text()
+        self.assertIn("## Сира відповідь агента", report)
+        self.assertIn(raw_text, report)
+
+    def test_truncate_raw_text_short_untouched(self):
+        short = "коротка відповідь агента"
+        self.assertEqual(sync_features._truncate_raw_text(short), short)
+
+    def test_truncate_raw_text_long_marks_truncation(self):
+        long_text = "x" * (sync_features._RAW_TEXT_TRUNCATE + 500)
+        result = sync_features._truncate_raw_text(long_text)
+        self.assertTrue(result.startswith("x" * sync_features._RAW_TEXT_TRUNCATE))
+        self.assertIn("обрізано", result)
+        self.assertIn(str(len(long_text)), result)
+        self.assertLess(len(result), len(long_text))
 
 
 if __name__ == "__main__":

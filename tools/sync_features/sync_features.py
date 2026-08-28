@@ -74,6 +74,23 @@ control loop, що обирає наступну дію зі слів причи
 робота (git log + Read 79-записового реєстру + до кільканадцяти окремих
 Edit-викликів + фінальна JSON-відповідь) потребує запасу, якого 20 не
 лишало.
+
+Task 7, ревʼю раунд 4 (Finding I): H закрито і підтверджено - контролер
+виміряв 0 витрачених ходів (Turns: 3) на тому самому `make run`, але
+прогін і надалі вийшов `агент повернув не JSON`, що відкрило два нові
+дефекти. I1 - `_write_journal` (`persist()`) тепер приймає
+`raw_agent_text` і зберігає сиру відповідь моделі (обрізану на 4000
+символів через `_truncate_raw_text`) у новій секції `## Сира відповідь
+агента` - лише на шляхах parse-failure і schema-failure, де payload ще
+`None` чи підозрілий: раніше провальний прогін лишав `## JSON агента`
+порожнім, і жоден спосіб зрозуміти, ЩО сказала модель, не існував без
+нового платного прогону. I2 - `verify.parse_agent_json` (див. докстрінг
+там) тепер шукає fenced-блок БУДЬ-ДЕ в тексті, не лише на початку, з
+balanced-`{...}`-фолбеком, коли огорожі немає взагалі; чиста проза й
+надалі МАЄ повертати `None` - R5 залежить саме від цього. `PROMPT` також
+підсилений (`Return ONLY JSON... no sentence before it, no sentence after
+it`) - вторинний захист, прохання, не гарантія; справжній фікс - у
+парсері, не в тексті промпту.
 """
 
 import asyncio
@@ -171,7 +188,8 @@ Hard constraints - violating any of these fails the run:
 - If a commit is ambiguous, leave it alone and say nothing about it. A
   missed discrepancy is cheap; a wrong edit to the registry is not.
 
-Return JSON matching exactly this shape, and nothing else:
+Return ONLY JSON matching exactly this shape - no sentence before it, no
+sentence after it, no markdown fence around it, nothing else on any line:
 {
   "flipped_to_done": ["ARCH-5"],
   "new_entries": [
@@ -208,6 +226,32 @@ def _display_shown(shown: str) -> str:
     return shown[: _DISPLAY_TRUNCATE - 3] + "..."
 
 
+# Fix I1 (Task 7, ревʼю раунд 4): межа для сирої відповіді агента, коли
+# обробка провалилась (парсинг чи схема). Щедра, не як `_DISPLAY_TRUNCATE`
+# (120 - для одного рядка журналу дозволів) - тут ціль прочитати ЦІЛУ
+# відповідь моделі, щоб зрозуміти, що вона сказала, а не лише впізнати її.
+_RAW_TEXT_TRUNCATE = 4000
+
+
+def _truncate_raw_text(text: str) -> str:
+    """Обрізати сиру відповідь агента для звіту, з видимою міткою обрізання.
+
+    Fix I1: контролер виміряв живий прогін, де парсинг провалився і
+    `## JSON агента` в артефакті лишився порожнім ("відсутній - ...") -
+    прогін коштував $0.10 і 103 секунди, і жодного способу зрозуміти, ЩО
+    саме сказала модель, без ще одного платного прогону. Сира відповідь
+    варта збереження РІВНО тоді, коли обробка провалилась: успішний парсинг
+    робить сирий текст зайвим (payload вже в звіті), провальний робить
+    сирий текст ЄДИНИМ джерелом правди.
+    """
+    if len(text) <= _RAW_TEXT_TRUNCATE:
+        return text
+    return (
+        text[:_RAW_TEXT_TRUNCATE]
+        + f"\n...(обрізано, повна довжина {len(text)} символів)"
+    )
+
+
 def _write_journal(
     out_dir: Path,
     registry_path: Path,
@@ -219,6 +263,7 @@ def _write_journal(
     payload: dict | None = None,
     violations: list[str] | None = None,
     process_note: str | None = None,
+    raw_agent_text: str | None = None,
 ) -> None:
     """Fix 6: зберегти features.patch і sync-report.md БЕЗУМОВНО.
 
@@ -250,6 +295,15 @@ def _write_journal(
     заради якого persist() безумовний, загубився б із traceback-ом саме на
     "агент зіпсував реєстр" - найцікавішому прогоні з усіх. Биті байти
     стають U+FFFD у diff/тексті звіту - не тихо, видимо, але без падіння.
+
+    Fix I1 (Task 7, ревʼю раунд 4): `raw_agent_text` - сира відповідь
+    агента (`result_message.result`), переданий ЛИШЕ з тих persist()-
+    викликів у `main_sync`, де обробка провалилась (парсинг JSON чи
+    схема) - саме тоді, коли `payload` ще `None` чи неповний, і сирий
+    текст лишається ЄДИНИМ джерелом правди про те, що модель реально
+    сказала. На успішному шляху й на I1/I3-порушеннях `payload` уже в
+    звіті - дублювати сирий текст там нічого не додає, тому параметр
+    `None` за замовчуванням, і секція просто не з'являється.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -290,6 +344,14 @@ def _write_journal(
     ids_mentioned = verify.mentioned_ids(payload) if payload is not None else set()
     coverage = gitscan.coverage_line(commits, ids_mentioned)
     process_note_block = process_note or "(немає)"
+    # Fix I1: секція з'являється ЛИШЕ коли викликач явно передав сирий
+    # текст (парсинг чи схема провалились) - на успішному шляху payload
+    # уже несе всю інформацію, і повторювати сирий текст нема сенсу.
+    raw_text_section = (
+        f"## Сира відповідь агента\n\n```\n{_truncate_raw_text(raw_agent_text)}\n```\n\n"
+        if raw_agent_text is not None
+        else ""
+    )
 
     (out_dir / "sync-report.md").write_text(
         f"# Звіт синхронізації реєстру фіч\n\n"
@@ -300,6 +362,7 @@ def _write_journal(
         f"## Рішення охоронця\n\n{guard_log or '(жодного виклику інструмента)'}\n\n"
         f"## Порушення інваріантів\n\n{violations_block}\n\n"
         f"## Покриття\n\n{coverage}\n\n"
+        f"{raw_text_section}"
         f"## JSON агента\n\n```json\n{payload_block}\n```\n",
         encoding="utf-8",
     )
@@ -468,6 +531,7 @@ async def main_sync() -> int:
         payload: dict | None = None,
         violations: list[str] | None = None,
         process_note: str | None = None,
+        raw_agent_text: str | None = None,
     ) -> None:
         _write_journal(
             out_dir,
@@ -480,6 +544,7 @@ async def main_sync() -> int:
             payload=payload,
             violations=violations,
             process_note=process_note,
+            raw_agent_text=raw_agent_text,  # Fix I1: лише для parse/schema
         )
 
     result_message, error_note = await _collect_result(prompt, options)
@@ -508,10 +573,15 @@ async def main_sync() -> int:
     payload, reason = verify.parse_agent_json(raw_result)
     if payload is None:
         print(f"[verify] {reason}", file=sys.stderr)
+        # Fix I1 (Task 7, ревʼю раунд 4): парсинг провалився - payload
+        # так і лишиться None, тому JSON-секція звіту нічого не покаже.
+        # raw_result - ЄДИНИЙ доказ того, що модель реально сказала;
+        # без нього діагностика вимагає нового платного прогону.
         persist(
             f"JSON агента не розпарсився: {reason}",
             result_message,
             process_note=error_note,
+            raw_agent_text=raw_result,
         )
         return 1
 
@@ -519,11 +589,16 @@ async def main_sync() -> int:
     if schema_problems:
         for problem in schema_problems:
             print(f"[verify] схема: {problem}", file=sys.stderr)
+        # Fix I1: тут payload УЖЕ є (JSON розпарсився), і він піде в
+        # `## JSON агента` як завжди - але порушення схеми означають, що
+        # ЩОСЬ у ньому не так, тому сирий текст ДОДАТКОВО йде поруч, щоб
+        # не гадати, як payload_block розійшовся з тим, що написав агент.
         persist(
             "схема відповіді порушена: " + "; ".join(schema_problems),
             result_message,
             payload,
             process_note=error_note,
+            raw_agent_text=raw_result,
         )
         return 1
     print("[verify] схема OK", file=sys.stderr)

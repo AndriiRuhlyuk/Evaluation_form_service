@@ -155,19 +155,77 @@ class TestMentionedIds(unittest.TestCase):
 
 
 class TestParseAgentJson(unittest.TestCase):
-    def test_plain_json(self):
-        payload, _ = parse_agent_json('{"flipped_to_done": [], "new_entries": []}')
-        self.assertEqual(payload, {"flipped_to_done": [], "new_entries": []})
+    """Fix I2 (Task 7, ревʼю раунд 4): контролер виміряв локально (без
+    мережі) шість реалістичних форм відповіді моделі - `parse_agent_json`
+    раніше знімав ```-огорожу лише коли ВЕСЬ текст ПОЧИНАВСЯ з неї, тому
+    прозовий вступ ламав парсинг структурно, хоча JSON у відповіді був
+    правильним. Кожен тест нижче - одна з шести форм, дослівно."""
 
-    def test_fenced_json(self):
-        raw = '```json\n{"flipped_to_done": [], "new_entries": []}\n```'
+    _BARE_JSON = '{"flipped_to_done": ["ARCH-1"], "new_entries": []}'
+
+    def test_shape_1_bare_json(self):
+        payload, _ = parse_agent_json(self._BARE_JSON)
+        self.assertEqual(payload, {"flipped_to_done": ["ARCH-1"], "new_entries": []})
+
+    def test_shape_2_fenced_json(self):
+        raw = f"```json\n{self._BARE_JSON}\n```"
         payload, _ = parse_agent_json(raw)
         self.assertIsNotNone(payload)
 
-    def test_prose_returns_none(self):
-        payload, reason = parse_agent_json("Я подивився історію і думаю, що…")
+    def test_shape_3_prose_before_fence(self):
+        raw = f"Here is the result:\n```json\n{self._BARE_JSON}\n```"
+        payload, _ = parse_agent_json(raw)
+        self.assertEqual(payload, {"flipped_to_done": ["ARCH-1"], "new_entries": []})
+
+    def test_shape_4_prose_after_fence(self):
+        raw = f"```json\n{self._BARE_JSON}\n```\nThat is my final answer."
+        payload, _ = parse_agent_json(raw)
+        self.assertEqual(payload, {"flipped_to_done": ["ARCH-1"], "new_entries": []})
+
+    def test_shape_5_prose_before_bare_json_no_fence(self):
+        raw = f"Here is my answer: {self._BARE_JSON}"
+        payload, _ = parse_agent_json(raw)
+        self.assertEqual(payload, {"flipped_to_done": ["ARCH-1"], "new_entries": []})
+
+    def test_shape_6_pure_prose_returns_none(self):
+        # Жорстка вимога брифу: чиста проза МАЄ повертати None - R5
+        # (доказ обробки помилок) залежить саме від цього.
+        raw = (
+            "I could not find any relevant discrepancies in the commit "
+            "log, so I made no changes to the registry."
+        )
+        payload, reason = parse_agent_json(raw)
         self.assertIsNone(payload)
         self.assertIn("JSON", reason)
+
+    def test_agent_quotes_example_then_gives_real_answer(self):
+        # Регресія для всього класу знахідки: дві огорожі, різний вміст -
+        # остання МАЄ трактуватись як відповідь, не перша (приклад).
+        raw = (
+            "Here is the shape as an example:\n"
+            '```json\n{"flipped_to_done": ["ARCH-1"], "new_entries": []}\n```\n'
+            "Now here is my actual answer:\n"
+            '```json\n{"flipped_to_done": ["ARCH-5"], "new_entries": []}\n```'
+        )
+        payload, reason = parse_agent_json(raw)
+        self.assertEqual(payload, {"flipped_to_done": ["ARCH-5"], "new_entries": []})
+        self.assertEqual(reason, "розібрано")
+
+    def test_python_fenced_block_not_mistaken_for_json(self):
+        # Не надто поблажливий: ```python не є ```json чи голою огорожею -
+        # має провалитись через balanced-span fallback (тут - на прозі
+        # без {}), не мовчки з'їсти чужий приклад коду.
+        raw = "```python\nprint('not json at all')\n```"
+        payload, reason = parse_agent_json(raw)
+        self.assertIsNone(payload)
+
+    def test_no_fence_prefers_first_balanced_span_documented_limit(self):
+        # Задокументований компроміс _find_balanced_json: без огорожі
+        # береться ПЕРШИЙ {...} - тут це навмисно приклад, не відповідь,
+        # щоб компроміс був видимий у тестах, а не лише в докстрінгу.
+        raw = 'Example shape: {"a": 1}. Real answer: {"flipped_to_done": [], "new_entries": []}'
+        payload, _ = parse_agent_json(raw)
+        self.assertEqual(payload, {"a": 1})
 
 
 class TestValidateSchema(unittest.TestCase):
