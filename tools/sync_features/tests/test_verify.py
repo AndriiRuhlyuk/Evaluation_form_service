@@ -5,6 +5,7 @@ from verify import (
     check_descriptions_intact,
     check_no_id_lost,
     check_parses,
+    mentioned_ids,
     parse_agent_json,
     run_all,
     validate_schema,
@@ -121,6 +122,36 @@ class TestI4Coverage(unittest.TestCase):
         ok, reason = check_coverage(commits, payload)
         self.assertFalse(ok)
         self.assertIn("CFG-2", reason)
+
+
+class TestMentionedIds(unittest.TestCase):
+    # Fix 7 (Task 6, fix round 1): єдине джерело правди для union'у
+    # flipped_to_done + id нових записів - раніше рахувалось окремо у
+    # check_coverage і в sync_features.py, ризик тихого розходження.
+
+    def test_union_of_both_sources(self):
+        payload = {
+            "flipped_to_done": ["ARCH-5"],
+            "new_entries": [{"id": "ARCH-28"}],
+        }
+        self.assertEqual(mentioned_ids(payload), {"ARCH-5", "ARCH-28"})
+
+    def test_new_entry_without_id_ignored(self):
+        payload = {"flipped_to_done": [], "new_entries": [{"category": "arch"}]}
+        self.assertEqual(mentioned_ids(payload), set())
+
+    def test_missing_keys_default_to_empty(self):
+        self.assertEqual(mentioned_ids({}), set())
+
+    def test_check_coverage_uses_same_union(self):
+        # Регресія: check_coverage і mentioned_ids мусять погоджуватись на
+        # одному й тому самому payload - інакше рядок покриття в звіті
+        # суперечив би I4-порушенню з того самого запуску.
+        commits = [("a1", "Fix: ARCH-5"), ("a2", "Fix: ARCH-28")]
+        payload = {"flipped_to_done": ["ARCH-5"], "new_entries": [{"id": "ARCH-28"}]}
+        ok, _ = check_coverage(commits, payload)
+        self.assertTrue(ok)
+        self.assertEqual(mentioned_ids(payload), {"ARCH-5", "ARCH-28"})
 
 
 class TestParseAgentJson(unittest.TestCase):

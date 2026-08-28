@@ -51,10 +51,23 @@ def check_descriptions_intact(
     return True, "описи наявних записів не змінені"
 
 
-def check_coverage(commits: list[tuple[str, str]], payload: dict) -> tuple[bool, str]:
-    """I4: кожен id із комітлогу присутній у відповіді агента."""
+def mentioned_ids(payload: dict) -> set[str]:
+    """Усі id фіч, згадані у відповіді агента: об'єднання двох джерел -
+    `flipped_to_done` і id нових записів у `new_entries`.
+
+    Task 6, fix round 1, Fix 7: раніше `check_coverage` і `sync_features.py`
+    рахували цей самий union кожен окремо - два копії однієї логіки в різних
+    файлах, одна з яких (у обгортці) не покрита тестами і могла тихо
+    розійтись із цією. Тепер обидва місця викликають цю функцію.
+    """
     mentioned = set(payload.get("flipped_to_done", []))
     mentioned |= {item["id"] for item in payload.get("new_entries", []) if "id" in item}
+    return mentioned
+
+
+def check_coverage(commits: list[tuple[str, str]], payload: dict) -> tuple[bool, str]:
+    """I4: кожен id із комітлогу присутній у відповіді агента."""
+    mentioned = mentioned_ids(payload)
     from_commits: set[str] = set()
     for _, subject in commits:
         from_commits |= extract_ids(subject)
