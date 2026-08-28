@@ -20,7 +20,9 @@ production guardrails (спец, розділ 1, R3a-R3d):
   точці першого вжитку, ПІСЛЯ обох перевірок, щоб порядок був структурно
   неможливо порушити майбутнім редагуванням, а не просто вірним "на цей
   момент". Fix round 2, Finding A: сам `async for` тепер в `try/except
-  (ResultError, ProcessError)`, бо CLI на реальному error-результаті кидає
+  ClaudeSDKError` (Fix A3, Task 7: розширено з вузької пари `(ResultError,
+  ProcessError)` до спільного базового класу - див. докстрінг
+  `_collect_result`), бо CLI на реальному error-результаті кидає
   виняток УСЕРЕДИНУ циклу одразу ПІСЛЯ того, як `ResultMessage` з
   `is_error=True` уже потрапив у `result_message` - без цього обгортання
   перевірка `is_error` нижче ніколи не виконувалась би на справжній помилці.
@@ -42,6 +44,19 @@ Fix round 1 (ревʼю після Task 6): усі шляхи файлової �
 не лишали жодного доказу. Патч рахується як текстовий diff "до" (знятий ДО
 виклику агента) проти поточного вмісту файлу, а не через `git diff`, щоб
 не захопити чужі незакомічені правки поза цим запуском (Fix 5).
+
+Task 7 (три знахідки, перенесені з ревʼю Task 6 через ліміт раундів):
+Fix A2 - `## Покриття` повернуто в `sync-report.md`: `_write_journal`
+тепер бере `commits` параметром і рахує `gitscan.coverage_line` сама,
+одним джерелом правди з `main_sync` (Fix 7). Fix A3 - `_collect_result`
+ловить спільний `ClaudeSDKError` (не вузьку пару) і друкує/повертає
+`error_note` БЕЗУМОВНО, а `main_sync` прокидує його в `persist(...,
+process_note=...)` на КОЖНОМУ шляху - аномалія процесу після success-фрейму
+більше не губиться мовчки. Fix A4 - усі `registry_path.read_text(...)` в
+цьому модулі й у `_write_journal` читають з `errors="replace"`: не-UTF-8
+байти, лишені агентом у `Features_list.json`, більше не підіймають
+`UnicodeDecodeError` усередині шляху, яким `persist()` рятує журнал саме
+на "агент зіпсував реєстр".
 """
 
 import asyncio
@@ -55,9 +70,8 @@ from pathlib import Path
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    ClaudeSDKError,
     HookMatcher,
-    ProcessError,
-    ResultError,
     ResultMessage,
     query,
 )
@@ -138,9 +152,11 @@ def _write_journal(
     registry_text_before: str,
     timestamp: str,
     state: str,
+    commits: list[tuple[str, str]],
     result_message: ResultMessage | None = None,
     payload: dict | None = None,
     violations: list[str] | None = None,
+    process_note: str | None = None,
 ) -> None:
     """Fix 6: зберегти features.patch і sync-report.md БЕЗУМОВНО.
 
@@ -155,11 +171,30 @@ def _write_journal(
     ДО виклику агента) проти поточного вмісту файлу на диску - НЕ через
     `git diff`, який захопив би будь-які незакомічені правки поза цим
     запуском (в основному checkout там лежить хендмейд ARCH-27).
+
+    Fix A2 (Task 7): `commits` - параметр, не обчислення "з повітря". Без
+    нього `## Покриття` неможливо відновити тут: `gitscan.coverage_line`
+    потребує список комітів, а сам журнал раніше про нього нічого не знав.
+    Рядок покриття рахується з `registry_text_before`/`payload`, доступних
+    саме тут - `ids_mentioned` через `verify.mentioned_ids(payload)`, той
+    самий шлях, яким уже рахує це і `main_sync` (Fix 7, уникнення
+    розходження копій). `payload is None` (ранні error-шляхи) дає порожню
+    множину id - рядок покриття все одно друкується, лише з 0 id від агента.
+
+    Fix A4 (Task 7): `read_text(..., errors="replace")` замість строгого
+    UTF-8 - якщо агент лишив у `Features_list.json` небайтові послідовності
+    (I1 це б і так зловив як "не парситься як JSON"), СТРОГИЙ `read_text`
+    підняв би `UnicodeDecodeError` ТУТ, усередині `persist()`, і журнал,
+    заради якого persist() безумовний, загубився б із traceback-ом саме на
+    "агент зіпсував реєстр" - найцікавішому прогоні з усіх. Биті байти
+    стають U+FFFD у diff/тексті звіту - не тихо, видимо, але без падіння.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if registry_path.exists():
-        registry_text_after = registry_path.read_text(encoding="utf-8")
+        registry_text_after = registry_path.read_text(
+            encoding="utf-8", errors="replace"
+        )
     else:
         registry_text_after = ""
     diff = "".join(
@@ -190,14 +225,19 @@ def _write_journal(
         if payload is not None
         else "(відсутній - " + state + ")"
     )
+    ids_mentioned = verify.mentioned_ids(payload) if payload is not None else set()
+    coverage = gitscan.coverage_line(commits, ids_mentioned)
+    process_note_block = process_note or "(немає)"
 
     (out_dir / "sync-report.md").write_text(
         f"# Звіт синхронізації реєстру фіч\n\n"
         f"- Час: {timestamp}\n"
         f"- Стан: {state}\n"
         f"{run_stats}\n"
+        f"## Аномалії процесу\n\n{process_note_block}\n\n"
         f"## Рішення охоронця\n\n{guard_log or '(жодного виклику інструмента)'}\n\n"
         f"## Порушення інваріантів\n\n{violations_block}\n\n"
+        f"## Покриття\n\n{coverage}\n\n"
         f"## JSON агента\n\n```json\n{payload_block}\n```\n",
         encoding="utf-8",
     )
@@ -220,13 +260,35 @@ async def _collect_result(
     ДО того, як код після циклу встиг би до неї дійти, і R5 лишався б
     недосяжним у принципі.
 
-    Виняток тут перехоплюється і ГАСИТЬСЯ: `result_message`, який уже встиг
-    заповнитись до моменту винятку, повертається як є, і викликач робить
-    is_error-перевірку на звичайному значенні - без другого, окремого шляху
-    помилки. `error_note` - лише діагностика для випадку, коли виняток
-    стався РАНІШЕ за будь-який `ResultMessage` (він і далі `None`): текст
-    винятку, щоб `persist()` у `main_sync` мав що написати в артефакт
-    замість загального "агент не повернув ResultMessage".
+    Виняток тут перехоплюється, `result_message` (якщо вже заповнений)
+    повертається як є, і викликач робить is_error-перевірку на звичайному
+    значенні - без другого, окремого шляху помилки.
+
+    Fix A3 (Task 7, знахідка перенесена з ревʼю Task 6): раніше `error_note`
+    заповнювався і друкувався ЛИШЕ коли `result_message is None`. CLI, що
+    ЕМІТУЄ success-фрейм (`is_error=False`) і ПОТІМ падає ненульовим кодом
+    при завершенні підпроцесу (крах, транспортний збій), лишався звичайним
+    `ProcessError` - виняток гасився мовчки, `main_sync` продовжував успішний
+    шлях, і запуск міг вийти кодом 0 без жодного слова в stderr про крах.
+    Тепер `error_note` заповнюється і друкується БЕЗУМОВНО, коли виняток
+    стався, незалежно від того, чи `result_message` уже заповнений -
+    викликач прокидує його в `persist(..., process_note=error_note)` на
+    КОЖНОМУ шляху (і успішному теж), тож аномалія лишається видимою і в
+    збереженому артефакті, не лише в скороминущому stderr.
+
+    Друге рішення A3: except розширено з вузької пари `(ResultError,
+    ProcessError)` до спільного базового класу `ClaudeSDKError`. Ревʼю
+    зазначило, що `CLIJSONDecodeError` і `CLIConnectionError` досі
+    втікали б traceback-ом до самого верху, без жодного персистованого
+    артефакту - точно так само, як швидка помилка `ProcessError`, яку
+    цей блок уже й так ловить. `MessageParseError`, згаданий у бриф
+    Task 7, у встановленій версії SDK не існує (перевірено:
+    `claude_agent_sdk.__all__` такого імені не містить - або перейменований,
+    або відсутній у цій версії пакета; НЕ вигадую вимірювання, якого не
+    робив). Усі чотири реальні винятки транспорту/протоколу SDK
+    (`ProcessError`, `ResultError`, `CLIConnectionError`,
+    `CLIJSONDecodeError`) успадковують `ClaudeSDKError` - ловимо спільного
+    предка один раз, щоб майбутній підклас SDK не став новою тихою дірою.
     """
     turn = 0
     result_message: ResultMessage | None = None
@@ -238,14 +300,9 @@ async def _collect_result(
                 print(f"[t={turn}] {str(message.content)[:80]}", file=sys.stderr)
             elif isinstance(message, ResultMessage):
                 result_message = message
-    except (ResultError, ProcessError) as exc:
-        if result_message is None:
-            # Виняток стався РАНІШЕ за будь-який ResultMessage - другого
-            # шляху помилки й досі немає, лише діагностика для persist().
-            error_note = f"{type(exc).__name__}: {exc}"
-            print(f"[error] query() підняв {error_note}", file=sys.stderr)
-        # інакше result_message вже заповнений (Finding A) - нічого
-        # додатково не друкуємо тут, бо викликач надрукує is_error нижче.
+    except ClaudeSDKError as exc:
+        error_note = f"{type(exc).__name__}: {exc}"
+        print(f"[error] query() підняв {error_note}", file=sys.stderr)
     return result_message, error_note
 
 
@@ -263,7 +320,12 @@ async def main_sync() -> int:
     repo_root = Path(guard.REPO_ROOT)
     registry_path = repo_root / guard.REGISTRY_PATH
 
-    registry_text = registry_path.read_text(encoding="utf-8")
+    # Fix A4 (Task 7, оборонно): errors="replace" замість строгого UTF-8 -
+    # той самий ризик, що й у _write_journal нижче, лише РАНІШЕ в потоці
+    # виконання. json.loads нижче все одно впаде на биті байти, але
+    # зрозумілим json.JSONDecodeError, не UnicodeDecodeError без жодного
+    # артефакту (тут це ще до виклику агента, тож persist() ще не існує).
+    registry_text = registry_path.read_text(encoding="utf-8", errors="replace")
     registry = json.loads(registry_text)
     # Fix 4: I1 доводить лише що файл лишається валідним JSON, не що він
     # має очікувану форму. Тут - ДО виклику агента, щоб не почати роботу
@@ -343,6 +405,7 @@ async def main_sync() -> int:
         result_message: ResultMessage | None = None,
         payload: dict | None = None,
         violations: list[str] | None = None,
+        process_note: str | None = None,
     ) -> None:
         _write_journal(
             out_dir,
@@ -350,9 +413,11 @@ async def main_sync() -> int:
             registry_text,
             timestamp,
             state,
+            commits,  # Fix A2: обов'язковий параметр _write_journal тепер
             result_message=result_message,
             payload=payload,
             violations=violations,
+            process_note=process_note,
         )
 
     result_message, error_note = await _collect_result(prompt, options)
@@ -361,7 +426,7 @@ async def main_sync() -> int:
         note = error_note or "агент не повернув ResultMessage"
         if error_note is None:
             print(f"[error] {note}", file=sys.stderr)
-        persist(note)
+        persist(note, process_note=error_note)
         return 1
     # R3c: is_error перевіряється ТУТ, до будь-якого читання
     # result_message.result - яке нижче зчитується один раз, у точці
@@ -370,14 +435,22 @@ async def main_sync() -> int:
         print(
             f"[error] is_error=True, subtype={result_message.subtype}", file=sys.stderr
         )
-        persist(f"is_error=True, subtype={result_message.subtype}", result_message)
+        persist(
+            f"is_error=True, subtype={result_message.subtype}",
+            result_message,
+            process_note=error_note,
+        )
         return 1
 
     raw_result = result_message.result or ""
     payload, reason = verify.parse_agent_json(raw_result)
     if payload is None:
         print(f"[verify] {reason}", file=sys.stderr)
-        persist(f"JSON агента не розпарсився: {reason}", result_message)
+        persist(
+            f"JSON агента не розпарсився: {reason}",
+            result_message,
+            process_note=error_note,
+        )
         return 1
 
     schema_problems = verify.validate_schema(payload)
@@ -388,17 +461,28 @@ async def main_sync() -> int:
             "схема відповіді порушена: " + "; ".join(schema_problems),
             result_message,
             payload,
+            process_note=error_note,
         )
         return 1
     print("[verify] схема OK", file=sys.stderr)
 
     # I1 перевіряється тут, ДО json.loads: агент міг лишити файл зламаним, і
-    # тоді json.loads кине виняток замість зрозумілого повідомлення.
-    after_text = registry_path.read_text(encoding="utf-8")
+    # тоді json.loads кине виняток замість зрозумілого повідомлення. Fix A4
+    # (Task 7): errors="replace" - той самий ризик, що й у _write_journal -
+    # некоректні байти агента не мають права підняти UnicodeDecodeError ТУТ
+    # і вбити запуск ДО persist(); замінені на U+FFFD, вони або дадуть
+    # JSONDecodeError нижче (очікуваний, зрозумілий шлях I1), або лишаться
+    # видимими в самому тексті, що персистується.
+    after_text = registry_path.read_text(encoding="utf-8", errors="replace")
     parses, parse_reason = verify.check_parses(after_text)
     if not parses:
         print(f"[verify] інваріант I1: {parse_reason}", file=sys.stderr)
-        persist(f"інваріант I1 порушено: {parse_reason}", result_message, payload)
+        persist(
+            f"інваріант I1 порушено: {parse_reason}",
+            result_message,
+            payload,
+            process_note=error_note,
+        )
         return 1
 
     after = json.loads(after_text)
@@ -417,6 +501,7 @@ async def main_sync() -> int:
             "Features_list.json після правки втратив очікувану форму",
             result_message,
             payload,
+            process_note=error_note,
         )
         return 1
 
@@ -436,6 +521,7 @@ async def main_sync() -> int:
         result_message,
         payload,
         violations,
+        process_note=error_note,
     )
 
     print(json.dumps(payload, ensure_ascii=False, indent=2))

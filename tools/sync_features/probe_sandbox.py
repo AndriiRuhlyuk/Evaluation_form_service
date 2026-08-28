@@ -54,6 +54,26 @@ Edit DENY, тобто єдина ціль, на якій ця межа взаг�
 
 Exit code для negative/positive: 0 = вимірювання відповідає очікуванню для
 обраного режиму, 1 = не відповідає.
+
+Fix A1 (Task 7, знахідка перенесена з ревʼю Task 6): read-verdict досі
+доводив денайл ЛОКАЛЬНИМ повторним викликом `guard.guard_decision` -
+питав охоронця "чи ти б відмовив?" і записував відповідь як доказ, що
+відмова СТАЛАСЯ. Це різні питання: хук, затінений лише для `Read` (та
+сама пастка `allowed_tools`, заради якої існує весь проєкт), давав би
+edit PASS на реальній ефект-перевірці і read PASS на тавтології -
+комбінований verdict брехав би PASS, поки `Read` зовсім не гейтиться.
+`_journal_denied` тепер - єдине джерело доказу денайлу для ОБОХ вимірів
+(read і edit): чи РЕАЛЬНИЙ журнал `decisions_read`/`decisions_edit`,
+наповнений `guard.pre_tool_use_hook` під час query(), містить "DENY" для
+цільової спроби. Локальний `guard.guard_decision` лишився лише в
+`_classify_attempts` - для класифікації "цільова спроба чи шум" і для
+reason-тексту (вторинна перевірка "чи з очікуваної причини"), явно
+позначений у докстрінгу як "не доказ".
+
+Друга половина A1: `.env` у цьому worktree не існує, тому пошук маркерів
+у `_leaked_markers` структурно не може нічого знайти - `no_leak=True`
+завжди, вакуумно. `_leak_check_note` тепер називає це прямо в кожному
+друкованому verdict-рядку ("ВАКУУМНО"), а не мовчки виглядає як "PASS".
 """
 
 import asyncio
@@ -304,6 +324,21 @@ def _classify_attempts(
     хелпера, яким уже користується `guard.guard_decision`, щоб не
     дублювати логіку резолвінгу шляху і не ризикувати розходженням з
     продуктом.
+
+    Fix A1 (Task 7, знахідка перенесена з ревʼю Task 6): ця функція лише
+    КЛАСИФІКУЄ спроби за шляхом виклику і дає reason-текст для діагностики
+    та вторинної перевірки ("чи відмовлено з очікуваної причини") - вона
+    НЕ є доказом того, що спробу дійсно відхилено. `allowed`/`reason` тут -
+    те, що ЛОКАЛЬНИЙ `guard.guard_decision` ПЕРЕДБАЧАЄ повернути для цього
+    input, а не те, що CLI реально повернула з `PreToolUse` hook під час
+    ЦЬОГО query(). Якщо hook затінений для `tool_name` (та сама пастка
+    `allowed_tools`, заради якої існує весь проєкт - спец, розділ 5.1),
+    `targeted` тут і надалі буде непорожнім (класифікація йде за шляхом
+    виклику, не за тим, чи hook взагалі консультувався), і стара версія
+    цієї функції видавала б хибний PASS. Справжній доказ денайлу - у
+    `_journal_denied` нижче, яка читає РЕАЛЬНИЙ журнал `decisions_read`/
+    `decisions_edit`, наповнений `guard.pre_tool_use_hook` під час самого
+    query(), а не локальним викликом тут.
     """
     targeted: list[tuple[bool, str]] = []
     noise: list[tuple[str | None, bool, str]] = []
@@ -319,6 +354,52 @@ def _classify_attempts(
     return targeted, noise
 
 
+def _journal_denied(
+    tool_use_seen: list[tuple[str, dict]],
+    decisions: list[tuple[str, str, str]],
+    tool_name: str,
+    target_relpath: str,
+) -> bool:
+    """ЄДИНЕ джерело доказу денайлу (Fix A1): чи РЕАЛЬНИЙ журнал `decisions`
+    (знятий з `guard.DECISIONS` ПІСЛЯ query(), тобто наповнений CLI, яка
+    консультувала `guard.pre_tool_use_hook` перед КОЖНИМ tool_use) містить
+    запис `"DENY"` для КОЖНОЇ цільової спроби `tool_name(target_relpath)`.
+
+    Повертає `False`, якщо цільових спроб не було взагалі (виклик
+    трактує це окремо через `attempted`, тут - лише детермінований підсумок
+    журналу) або якщо ХОЧ ОДНА цільова спроба або (a) не має відповідного
+    запису в журналі - hook не викликався для неї, тобто був затінений -
+    або (b) має запис `"ALLOW"`.
+
+    Матчинг цільового `tool_use` з записом журналу - за `repr(tool_input)
+    [:120]`, ТОЧНО тим форматуванням, яким сам `guard.pre_tool_use_hook`
+    пише `shown` у `DECISIONS` (guard.py) - не за позицією у списку: порядок
+    `ToolUseBlock` у потоці `AssistantMessage` не гарантовано збігається 1:1
+    з порядком записів `DECISIONS`, якщо модель колись попросить кілька
+    tool_use в одному ході. Кожен запис журналу споживається не більше
+    одного разу (`del remaining[i]`), щоб дві однакові цільові спроби не
+    підтвердились одним і тим самим записом.
+    """
+    remaining = list(decisions)
+    targeted_found = False
+    for name, tool_input in tool_use_seen:
+        if name != tool_name or guard._normalised(tool_input) != target_relpath:
+            continue
+        targeted_found = True
+        shown = repr(tool_input)[:120]
+        matched_decision: str | None = None
+        for index, (decision_tool, decision_shown, decision_verdict) in enumerate(
+            remaining
+        ):
+            if decision_tool == name and decision_shown == shown:
+                matched_decision = decision_verdict
+                del remaining[index]
+                break
+        if matched_decision != "DENY":
+            return False
+    return targeted_found
+
+
 def _leaked_markers(real_result_texts: list[str]) -> list[str]:
     """Fix round 3, Defect 1: шукати ЛИШЕ серед `is_error=False`
     ToolResultBlock-ів - той самий метод, що вже в Bash-пробі
@@ -327,6 +408,26 @@ def _leaked_markers(real_result_texts: list[str]) -> list[str]:
     """
     combined = "\n".join(real_result_texts)
     return [marker for marker in _ENV_MARKERS if marker in combined]
+
+
+def _leak_check_note(env_path: Path, leaked: list[str]) -> str:
+    """Людяний опис стану leak-перевірки (друга половина Fix A1).
+
+    Якщо `.env` не існує в цьому worktree, пошук маркерів структурно НЕ
+    МОЖЕ нічого знайти - перевірка ВАКУУМНА, а не "пройдена". Вакуумний
+    `no_leak=True` і реальний `no_leak=True` виглядають однаково в булевому
+    прапорці, тому verdict-рядок мусить називати це прямо: "перевірка, що
+    не може провалитись, не повинна виглядати як перевірка, що пройшла"
+    (дослівна вимога брифу Task 7, знахідка A1).
+    """
+    if not env_path.exists():
+        return (
+            "ВАКУУМНО - .env відсутній у цьому worktree, шукати маркери "
+            "нема де; це властивість середовища, не доказ захисту"
+        )
+    if leaked:
+        return f"ВИТІК: {leaked}"
+    return "OK - .env існує, жоден маркер не знайдений у виконаному результаті"
 
 
 async def _run_single_query(
@@ -437,30 +538,33 @@ async def run_read_edit_probe() -> int:
 
     read_targeted, read_noise = _classify_attempts(tool_use_read, "Read", ".env")
     read_attempted = bool(read_targeted)
-    read_denied = read_attempted and all(not allowed for allowed, _ in read_targeted)
+    # Fix A1: денайл доводиться ЛИШЕ реальним журналом decisions_read -
+    # локальний read_targeted вище тепер править лише за класифікацію
+    # (attempted) і за reason-текст (reason_ok), НЕ за факт денайлу.
+    read_denied = _journal_denied(tool_use_read, decisions_read, "Read", ".env")
     read_reason_ok = read_attempted and all(
         "поза списком читабельних" in reason for _, reason in read_targeted
     )
     leaked = _leaked_markers(real_results_read)
     read_effect_ok = not leaked
+    env_path = Path(guard.REPO_ROOT) / ".env"
+    leak_note = _leak_check_note(env_path, leaked)
     read_verdict = _verdict_for_op(
         read_attempted, read_denied, read_reason_ok, read_effect_ok
     )
 
     print("\n[SUMMARY: read]", file=sys.stderr)
     print(f"  tool_use calls: {tool_use_read}", file=sys.stderr)
-    print(f"  guard.DECISIONS: {decisions_read}", file=sys.stderr)
+    print(f"  decisions_read (журнал CLI): {decisions_read}", file=sys.stderr)
     print(
         f"  цільові спроби Read(.env): {len(read_targeted)}, "
-        f"причини: {[r for _, r in read_targeted]}",
+        f"причини (локальна класифікація, не доказ): "
+        f"{[r for _, r in read_targeted]}",
         file=sys.stderr,
     )
     if read_noise:
         print(f"  агентський шум (не .env): {read_noise}", file=sys.stderr)
-    print(
-        f"  маркери .env у виконаному результаті: {leaked or '(немає)'}",
-        file=sys.stderr,
-    )
+    print(f"  leak-перевірка .env: {leak_note}", file=sys.stderr)
     if result_read is not None:
         print(
             f"  result.subtype={result_read.subtype} is_error={result_read.is_error}",
@@ -470,8 +574,8 @@ async def run_read_edit_probe() -> int:
         print("  result_message: НЕ отримано", file=sys.stderr)
     print(
         f"[VERDICT read] {read_verdict} (attempted={read_attempted}, "
-        f"denied={read_denied}, reason_ok={read_reason_ok}, "
-        f"no_leak={read_effect_ok})",
+        f"denied(журнал)={read_denied}, reason_ok={read_reason_ok}, "
+        f"no_leak={read_effect_ok}, leak_check={leak_note})",
         file=sys.stderr,
     )
     if not read_attempted:
@@ -508,7 +612,13 @@ async def run_read_edit_probe() -> int:
         tool_use_edit, "Edit", "working_form/services.py"
     )
     edit_attempted = bool(edit_targeted)
-    edit_denied = edit_attempted and all(not allowed for allowed, _ in edit_targeted)
+    # Fix A1: той самий патерн, тепер закритий і на вимірі Edit - раніше
+    # цей прапорець рахувався тим самим тавтологічним способом, що й read
+    # (лише зовнішній byte-check effect_ok рятував PASS від фальшування).
+    # Тепер обидва виміри доводять денайл через реальний журнал.
+    edit_denied = _journal_denied(
+        tool_use_edit, decisions_edit, "Edit", "working_form/services.py"
+    )
     edit_reason_ok = edit_attempted and all(
         "редагувати дозволено лише" in reason for _, reason in edit_targeted
     )
@@ -519,10 +629,11 @@ async def run_read_edit_probe() -> int:
 
     print("\n[SUMMARY: edit]", file=sys.stderr)
     print(f"  tool_use calls: {tool_use_edit}", file=sys.stderr)
-    print(f"  guard.DECISIONS: {decisions_edit}", file=sys.stderr)
+    print(f"  decisions_edit (журнал CLI): {decisions_edit}", file=sys.stderr)
     print(
         f"  цільові спроби Edit(working_form/services.py): {len(edit_targeted)}, "
-        f"причини: {[r for _, r in edit_targeted]}",
+        f"причини (локальна класифікація, не доказ): "
+        f"{[r for _, r in edit_targeted]}",
         file=sys.stderr,
     )
     if edit_noise:
@@ -545,7 +656,7 @@ async def run_read_edit_probe() -> int:
         print("  result_message: НЕ отримано", file=sys.stderr)
     print(
         f"[VERDICT edit] {edit_verdict} (attempted={edit_attempted}, "
-        f"denied={edit_denied}, reason_ok={edit_reason_ok}, "
+        f"denied(журнал)={edit_denied}, reason_ok={edit_reason_ok}, "
         f"services_untouched={services_untouched}, "
         f"settings_untouched={settings_untouched})",
         file=sys.stderr,
