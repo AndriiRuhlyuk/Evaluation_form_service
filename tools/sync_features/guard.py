@@ -190,6 +190,19 @@ async def pre_tool_use_hook(input_data, tool_use_id, context) -> dict:
     отримувало deny. `tool_name`/`tool_input` читаються safe-геттерами до
     try, бо сам `input_data.get(...)` може впасти, якщо input_data не dict
     (наприклад None) - це не повинно завадити журналу зафіксувати рішення.
+
+    Fix E (Task 7, ревʼю раунд 1): `DECISIONS` зберігає ПОВНИЙ `repr(
+    tool_input)`, БЕЗ обрізання. Раніше `repr(tool_input)[:120]` обрізався
+    ТУТ, у місці запису - контролер виміряв живий прогін, де repr довжиною
+    126 символів обрізався до 120 і губив хвіст `services.py` (лишалось
+    `...working_form/service`), через що `probe_sandbox._journal_denied`
+    (звіряє журнал за РІВНІСТЮ repr) не знаходив відповідного запису й
+    видавав FAIL там, де денайл реально стався. Обрізання - вимога
+    ВІДОБРАЖЕННЯ (рядок звіту має бути читабельним), а не зберігання;
+    журнал у пам'яті нічого не виграє від короткого рядка, натомість
+    програмна звірка отримує спотворені дані. Обрізання тепер лише в
+    точці РЕНДЕРУ - `sync_features._write_journal` (`guard_log`) і
+    `probe_sandbox._short_repr` для власних print-рядків.
     """
     tool_name = input_data.get("tool_name", "") if isinstance(input_data, dict) else ""
     tool_input = (
@@ -205,9 +218,7 @@ async def pre_tool_use_hook(input_data, tool_use_id, context) -> dict:
     except Exception as exc:  # межа безпеки: будь-який збій -> deny, без винятку
         allowed, reason = False, f"охоронець впав з винятком: {exc!r}"
 
-    DECISIONS.append(
-        (tool_name, repr(tool_input)[:120], "ALLOW" if allowed else "DENY")
-    )
+    DECISIONS.append((tool_name, repr(tool_input), "ALLOW" if allowed else "DENY"))
 
     return {
         "hookSpecificOutput": {

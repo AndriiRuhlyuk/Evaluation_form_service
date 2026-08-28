@@ -273,6 +273,33 @@ class TestPreToolUseHook(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tool_name, "Bash")
         self.assertEqual(verdict, "DENY")
 
+    async def test_decisions_log_keeps_full_repr_not_truncated(self):
+        # Fix E (Task 7, ревʼю раунд 1): раніше DECISIONS.append обрізав
+        # repr(tool_input) до 120 символів У МОМЕНТ ЗАПИСУ. Контролер
+        # виміряв живий прогін, де repr довжиною 126 символів обрізався до
+        # 120 і губив хвіст "services.py" - probe_sandbox._journal_denied
+        # (звіряє журнал за рівністю repr) не знаходив збігу і давав FAIL
+        # на реальному DENY. Цей тест з умисним ДОВГИМ file_path провалився
+        # б під старою поведінкою (guard.DECISIONS[0][1] мав би довжину
+        # 120, а не повний рядок).
+        long_path = "working_form/" + "x" * 100 + "/services.py"
+        tool_input = {"file_path": long_path}
+        full_repr = repr(tool_input)
+        self.assertGreater(
+            len(full_repr), 120, "тестовий input мусить сам перевищувати старий ліміт"
+        )
+
+        await guard.pre_tool_use_hook(
+            {"tool_name": "Edit", "tool_input": tool_input},
+            "tool-use-7",
+            {},
+        )
+
+        self.assertEqual(len(guard.DECISIONS), 1)
+        _, shown, _ = guard.DECISIONS[0]
+        self.assertEqual(shown, full_repr)
+        self.assertIn("services.py", shown)
+
 
 class TestSelfCheck(unittest.TestCase):
     def test_self_check_passes_silently(self):

@@ -127,8 +127,10 @@ class TestCollectResult(unittest.IsolatedAsyncioTestCase):
 class TestWriteJournal(unittest.TestCase):
     """`_write_journal` - чиста I/O-функція без `query()`, тому TDD-exempt
     з докстрінга модуля її не стосується. Покриває Fix A2 (Task 7,
-    `## Покриття` повернуто в звіт), Fix A3 (`## Аномалії процесу`) і
-    Fix A4 (`errors="replace"` на биті байти реєстру)."""
+    `## Покриття` повернуто в звіт), Fix A3 (`## Аномалії процесу`),
+    Fix A4 (`errors="replace"` на биті байти реєстру) і Fix E (ревʼю
+    раунд 1: обрізання `shown` переїхало сюди, з `guard.py`, і
+    застосовується лише до тексту звіту, не до `guard.DECISIONS`)."""
 
     def setUp(self):
         guard.DECISIONS.clear()
@@ -222,6 +224,55 @@ class TestWriteJournal(unittest.TestCase):
             self.fail("_write_journal підняв UnicodeDecodeError на биті байти")
         self.assertTrue((self.out_dir / "sync-report.md").exists())
         self.assertTrue((self.out_dir / "features.patch").exists())
+
+    def test_guard_log_renders_full_journal_entry_when_short(self):
+        guard.DECISIONS.append(("Read", repr({"file_path": ".env"}), "DENY"))
+        sync_features._write_journal(
+            self.out_dir,
+            self.registry_path,
+            '{"features": []}',
+            "2026-08-29-000000",
+            "успішно",
+            [],
+        )
+        report = self._report_text()
+        self.assertIn("{'file_path': '.env'}", report)
+
+    def test_guard_log_truncates_long_journal_entry_at_render_time(self):
+        # Fix E (Task 7, ревʼю раунд 1): guard.DECISIONS тепер зберігає
+        # ПОВНИЙ repr - обрізання переїхало сюди, у _write_journal, через
+        # _display_shown. Довгий запис має лишитись читабельним у звіті
+        # (не розтягувати рядок на сотні символів), але DECISIONS у
+        # пам'яті - і те, що звіряє _journal_denied - лишається повним.
+        long_shown = repr({"file_path": "working_form/" + "z" * 100 + "/services.py"})
+        self.assertGreater(len(long_shown), 120)
+        guard.DECISIONS.append(("Edit", long_shown, "DENY"))
+
+        sync_features._write_journal(
+            self.out_dir,
+            self.registry_path,
+            '{"features": []}',
+            "2026-08-29-000000",
+            "успішно",
+            [],
+        )
+        report = self._report_text()
+        self.assertNotIn(long_shown, report)
+        self.assertIn(long_shown[:117] + "...", report)
+        # Сам журнал у пам'яті лишається неушкодженим - обрізання не
+        # мутує guard.DECISIONS, лише те, що йде в текст звіту.
+        self.assertEqual(guard.DECISIONS[0][1], long_shown)
+
+    def test_display_shown_leaves_short_strings_untouched(self):
+        short = "abc"
+        self.assertEqual(sync_features._display_shown(short), short)
+
+    def test_display_shown_truncates_with_ellipsis(self):
+        long_shown = "x" * 200
+        result = sync_features._display_shown(long_shown)
+        self.assertEqual(len(result), 120)
+        self.assertTrue(result.endswith("..."))
+        self.assertEqual(result, "x" * 117 + "...")
 
 
 if __name__ == "__main__":

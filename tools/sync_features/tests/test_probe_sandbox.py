@@ -21,7 +21,7 @@ class TestJournalDenied(unittest.TestCase):
 
     def test_targeted_call_denied_in_journal_is_true(self):
         tool_use = [("Read", {"file_path": ".env"})]
-        decisions = [("Read", repr({"file_path": ".env"})[:120], "DENY")]
+        decisions = [("Read", repr({"file_path": ".env"}), "DENY")]
         self.assertTrue(
             probe_sandbox._journal_denied(tool_use, decisions, "Read", ".env")
         )
@@ -29,7 +29,7 @@ class TestJournalDenied(unittest.TestCase):
     def test_targeted_call_allowed_in_journal_is_false(self):
         # Хук насправді ДОЗВОЛИВ - охоронець зламаний чи затінений.
         tool_use = [("Read", {"file_path": ".env"})]
-        decisions = [("Read", repr({"file_path": ".env"})[:120], "ALLOW")]
+        decisions = [("Read", repr({"file_path": ".env"}), "ALLOW")]
         self.assertFalse(
             probe_sandbox._journal_denied(tool_use, decisions, "Read", ".env")
         )
@@ -59,8 +59,8 @@ class TestJournalDenied(unittest.TestCase):
         target_input = {"file_path": ".env"}
         tool_use = [("Read", noise_input), ("Read", target_input)]
         decisions = [
-            ("Read", repr(noise_input)[:120], "DENY"),
-            ("Read", repr(target_input)[:120], "DENY"),
+            ("Read", repr(noise_input), "DENY"),
+            ("Read", repr(target_input), "DENY"),
         ]
         self.assertTrue(
             probe_sandbox._journal_denied(tool_use, decisions, "Read", ".env")
@@ -71,7 +71,7 @@ class TestJournalDenied(unittest.TestCase):
         tool_use = [("Read", target_input), ("Read", target_input)]
         # Лише ОДИН запис DENY у журналі на дві однакові цільові спроби -
         # другій спробі не має чим підтвердитись.
-        decisions = [("Read", repr(target_input)[:120], "DENY")]
+        decisions = [("Read", repr(target_input), "DENY")]
         self.assertFalse(
             probe_sandbox._journal_denied(tool_use, decisions, "Read", ".env")
         )
@@ -82,10 +82,42 @@ class TestJournalDenied(unittest.TestCase):
         # десь у файлі" - ховався і в edit_denied).
         target_input = {"file_path": "working_form/services.py"}
         tool_use = [("Edit", target_input)]
-        decisions = [("Edit", repr(target_input)[:120], "DENY")]
+        decisions = [("Edit", repr(target_input), "DENY")]
         self.assertTrue(
             probe_sandbox._journal_denied(
                 tool_use, decisions, "Edit", "working_form/services.py"
+            )
+        )
+
+    def test_long_repr_beyond_old_120_limit_still_matches(self):
+        # Fix E (Task 7, ревʼю раунд 1): раніше guard.py обрізав repr до
+        # 120 символів У МОМЕНТ ЗАПИСУ в DECISIONS - контролер виміряв живий
+        # прогін, де repr довжиною 126 символів обрізався і губив хвіст
+        # "s.py" з "working_form/services.py", тож ця функція (яка звіряє
+        # РІВНІСТЬ рядків) не знаходила збігу і давала FAIL на реальному
+        # DENY. Тестовий шлях тут навмисно довгий, щоб його repr сам
+        # перевищував 120 символів.
+        long_path = "working_form/" + "y" * 100 + "/services.py"
+        target_input = {"file_path": long_path}
+        full_repr = repr(target_input)
+        self.assertGreater(len(full_repr), 120)
+
+        tool_use = [("Edit", target_input)]
+
+        # Журнал зберігає ПОВНИЙ repr (як тепер робить guard.py) - матч є.
+        decisions_full = [("Edit", full_repr, "DENY")]
+        self.assertTrue(
+            probe_sandbox._journal_denied(tool_use, decisions_full, "Edit", long_path)
+        )
+
+        # Санітарна перевірка механізму: якби журнал і надалі зберігав
+        # ОБРІЗАНИЙ рядок (стара поведінка guard.py до Fix E), матчу не
+        # було б - саме так стара тавтологія маскувалась під "PASS", а
+        # реальний денайл - під FAIL.
+        decisions_truncated_old_style = [("Edit", full_repr[:120], "DENY")]
+        self.assertFalse(
+            probe_sandbox._journal_denied(
+                tool_use, decisions_truncated_old_style, "Edit", long_path
             )
         )
 

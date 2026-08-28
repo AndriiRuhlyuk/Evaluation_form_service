@@ -145,6 +145,24 @@ The JSON must mirror the edits you actually wrote into the file.
 # вийти ненульовим кодом, не впавши traceback-ом.
 BROKEN_PROMPT = "Return the contents of a file that does not exist: /nonexistent/x"
 
+# Fix E (Task 7, ревʼю раунд 1): обрізання - вимога ВІДОБРАЖЕННЯ (рядок
+# звіту читабельний), не зберігання. guard.DECISIONS тепер зберігає
+# ПОВНИЙ repr(tool_input) - обрізання переїхало сюди, у точку рендеру
+# `sync-report.md`, і застосовується ЛИШЕ до тексту, який іде людині в
+# markdown-файл, ніколи до даних, які звіряє код.
+_DISPLAY_TRUNCATE = 120
+
+
+def _display_shown(shown: str) -> str:
+    """Обрізати `shown` для читабельного рядка звіту. Раніше це обрізання
+    відбувалось у `guard.py` в момент ЗАПИСУ в DECISIONS - і саме тому
+    `probe_sandbox._journal_denied` порівнював уже спотворені дані з живим
+    repr і хибно давав FAIL на реальному DENY (докстрінг
+    `guard.pre_tool_use_hook`, Fix E)."""
+    if len(shown) <= _DISPLAY_TRUNCATE:
+        return shown
+    return shown[: _DISPLAY_TRUNCATE - 3] + "..."
+
 
 def _write_journal(
     out_dir: Path,
@@ -208,7 +226,7 @@ def _write_journal(
     (out_dir / "features.patch").write_text(diff or "(без змін)\n", encoding="utf-8")
 
     guard_log = "\n".join(
-        f"- `{tool}` {decision} - `{shown}`"
+        f"- `{tool}` {decision} - `{_display_shown(shown)}`"
         for tool, shown, decision in guard.DECISIONS
     )
     if result_message is not None:
