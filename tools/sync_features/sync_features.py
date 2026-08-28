@@ -19,7 +19,11 @@ production guardrails (спец, розділ 1, R3a-R3d):
   змінної до перевірки (fix round 1, Fix 8): читається один раз, точно в
   точці першого вжитку, ПІСЛЯ обох перевірок, щоб порядок був структурно
   неможливо порушити майбутнім редагуванням, а не просто вірним "на цей
-  момент".
+  момент". Fix round 2, Finding A: сам `async for` тепер в `try/except
+  (ResultError, ProcessError)`, бо CLI на реальному error-результаті кидає
+  виняток УСЕРЕДИНУ циклу одразу ПІСЛЯ того, як `ResultMessage` з
+  `is_error=True` уже потрапив у `result_message` - без цього обгортання
+  перевірка `is_error` нижче ніколи не виконувалась би на справжній помилці.
 - R3d: `ANTHROPIC_API_KEY` цей модуль не читає, не пише і не логує взагалі -
   локальна автентифікація йде через OAuth-сесію бінарника `claude`, SDK
   успадковує її з підпроцесу (спец, розділ 8). Єдина змінна оточення, яку
@@ -52,6 +56,8 @@ from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     HookMatcher,
+    ProcessError,
+    ResultError,
     ResultMessage,
     query,
 )
@@ -198,6 +204,51 @@ def _write_journal(
     print(f"[saved] {out_dir}", file=sys.stderr)
 
 
+async def _collect_result(
+    prompt: str, options: ClaudeAgentOptions
+) -> tuple[ResultMessage | None, str | None]:
+    """Прогнати `query()` до кінця і повернути останній `ResultMessage`.
+
+    Finding A (fix round 2, ревʼю): на реальному error-результаті CLI
+    навмисно виходить ненульовим кодом одразу після емісії result-фрейму з
+    `is_error=True` ("for shell-script consumers") - SDK перепаковує це у
+    `ResultError` (підклас `ProcessError`, `claude_agent_sdk/_internal/
+    query.py:406-424`, `raise` на рядку 903) і кидає виняток УСЕРЕДИНУ
+    `async for`, на ітерації ПІСЛЯ тієї, що вже віддала `ResultMessage`.
+    Без цього `try/except` перевірка `is_error` у `main_sync` НІКОЛИ не
+    виконувалась би на справжній помилці - виняток вибивав би з `async for`
+    ДО того, як код після циклу встиг би до неї дійти, і R5 лишався б
+    недосяжним у принципі.
+
+    Виняток тут перехоплюється і ГАСИТЬСЯ: `result_message`, який уже встиг
+    заповнитись до моменту винятку, повертається як є, і викликач робить
+    is_error-перевірку на звичайному значенні - без другого, окремого шляху
+    помилки. `error_note` - лише діагностика для випадку, коли виняток
+    стався РАНІШЕ за будь-який `ResultMessage` (він і далі `None`): текст
+    винятку, щоб `persist()` у `main_sync` мав що написати в артефакт
+    замість загального "агент не повернув ResultMessage".
+    """
+    turn = 0
+    result_message: ResultMessage | None = None
+    error_note: str | None = None
+    try:
+        async for message in query(prompt=prompt, options=options):
+            if isinstance(message, AssistantMessage):
+                turn += 1
+                print(f"[t={turn}] {str(message.content)[:80]}", file=sys.stderr)
+            elif isinstance(message, ResultMessage):
+                result_message = message
+    except (ResultError, ProcessError) as exc:
+        if result_message is None:
+            # Виняток стався РАНІШЕ за будь-який ResultMessage - другого
+            # шляху помилки й досі немає, лише діагностика для persist().
+            error_note = f"{type(exc).__name__}: {exc}"
+            print(f"[error] query() підняв {error_note}", file=sys.stderr)
+        # інакше result_message вже заповнений (Finding A) - нічого
+        # додатково не друкуємо тут, бо викликач надрукує is_error нижче.
+    return result_message, error_note
+
+
 async def main_sync() -> int:
     """Асинхронна оркестрація: pre-check -> agent loop -> verify -> persist.
 
@@ -304,18 +355,13 @@ async def main_sync() -> int:
             violations=violations,
         )
 
-    turn = 0
-    result_message: ResultMessage | None = None
-    async for message in query(prompt=prompt, options=options):
-        if isinstance(message, AssistantMessage):
-            turn += 1
-            print(f"[t={turn}] {str(message.content)[:80]}", file=sys.stderr)
-        elif isinstance(message, ResultMessage):
-            result_message = message
+    result_message, error_note = await _collect_result(prompt, options)
 
     if result_message is None:
-        print("[error] агент не повернув ResultMessage", file=sys.stderr)
-        persist("агент не повернув ResultMessage")
+        note = error_note or "агент не повернув ResultMessage"
+        if error_note is None:
+            print(f"[error] {note}", file=sys.stderr)
+        persist(note)
         return 1
     # R3c: is_error перевіряється ТУТ, до будь-якого читання
     # result_message.result - яке нижче зчитується один раз, у точці
