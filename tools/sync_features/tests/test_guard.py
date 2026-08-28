@@ -1,7 +1,9 @@
 """Тести охоронця дозволів. Кожен кейс - окрема дірка в пісочниці."""
 
 import os
+import tempfile
 import unittest
+from unittest import mock
 
 import guard
 from guard import guard_decision
@@ -67,6 +69,31 @@ class TestBashRules(unittest.TestCase):
         allowed, _ = guard_decision("Bash", None)
         self.assertFalse(allowed)
 
+    # --- NEW-1: обхід білого списку опцій через ANSI-C quoting bash ($'...') ---
+
+    def test_ansi_c_quoting_denied(self):
+        allowed, _ = guard_decision(
+            "Bash", {"command": "git log --oneline $'\\x2d\\x2doutput=/tmp/x'"}
+        )
+        self.assertFalse(allowed)
+
+    def test_dollar_forms_denied(self):
+        for command in (
+            "git log ${IFS}",
+            "git log --oneline $HOME",
+            "git log $(whoami)",
+        ):
+            allowed, _ = guard_decision("Bash", {"command": command})
+            self.assertFalse(allowed, command)
+
+    # --- NEW-3: "--" (pathspec separator) має лишитись прохідним ---
+
+    def test_pathspec_separator_allowed(self):
+        allowed, reason = guard_decision(
+            "Bash", {"command": "git log --oneline -- Features_list.json"}
+        )
+        self.assertTrue(allowed, reason)
+
     # --- білий список опцій git log не мусить блокувати легітимні форми ---
 
     def test_allowed_git_log_forms_still_pass(self):
@@ -74,6 +101,7 @@ class TestBashRules(unittest.TestCase):
             "git log --oneline -40",
             "git log --since=2026-08-01 --oneline",
             "git log --no-merges --format=%h",
+            "git log --oneline -3",
         ):
             allowed, reason = guard_decision("Bash", {"command": command})
             self.assertTrue(allowed, f"{command}: {reason}")
@@ -123,6 +151,12 @@ class TestReadRules(unittest.TestCase):
 
     def test_non_string_file_path_denied(self):
         allowed, _ = guard_decision("Read", {"file_path": 42})
+        self.assertFalse(allowed)
+
+    # --- I3, залишок: рівно один "/" виконано буквально, але .git службовий ---
+
+    def test_dot_directory_services_denied(self):
+        allowed, _ = guard_decision("Read", {"file_path": ".git/services.py"})
         self.assertFalse(allowed)
 
 
@@ -192,10 +226,44 @@ class TestPreToolUseHook(unittest.IsolatedAsyncioTestCase):
         output = result["hookSpecificOutput"]
         self.assertEqual(output["permissionDecision"], "deny")
 
+    async def test_hook_survives_broken_stderr(self):
+        # NEW-2: попередній try закінчувався до логування, тому падіння
+        # print(..., file=sys.stderr) вибивало виняток із hook без жодного
+        # рішення (ні allow, ні deny). Тепер вхід легітимний, але stderr
+        # зламаний - hook мусить повернути deny, а не підняти виняток.
+        class BrokenStderr:
+            def write(self, _data):
+                raise OSError("stderr зламано")
+
+            def flush(self):
+                pass
+
+        with mock.patch("sys.stderr", BrokenStderr()):
+            result = await guard.pre_tool_use_hook(
+                {"tool_name": "Bash", "tool_input": {"command": "git log -1"}},
+                "tool-use-5",
+                {},
+            )
+        output = result["hookSpecificOutput"]
+        self.assertEqual(output["permissionDecision"], "deny")
+
 
 class TestSelfCheck(unittest.TestCase):
     def test_self_check_passes_silently(self):
         self.assertIsNone(guard.self_check())
+
+    def test_self_check_fails_when_registry_missing(self):
+        # REPO_ROOT обчислюється з розташування guard.py; якщо файл
+        # перемістити, нормалізація тихо перейде на інше дерево - self_check
+        # мусить це ловити явною перевіркою існування REGISTRY_PATH.
+        original_root = guard.REPO_ROOT
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            guard.REPO_ROOT = tmp_dir
+            try:
+                with self.assertRaises(SystemExit):
+                    guard.self_check()
+            finally:
+                guard.REPO_ROOT = original_root
 
 
 if __name__ == "__main__":
