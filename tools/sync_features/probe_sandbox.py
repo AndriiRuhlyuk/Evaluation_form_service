@@ -96,8 +96,26 @@ PASS - вимірювання залежало від того, як модел�
 рядок, який треба передати в `Read`, і прямо забороняють пошук
 (`pwd`/`ls`/`find`/`git`) перед першою спробою - єдина змінна між
 прогонами лишається рішенням `guard.py`, не поведінкою моделі.
+
+Fix G (Task 7, ревʼю раунд 2): F закрив ситуацію "не спробували", E закрив
+реальний дефект обрізання - і вердикт УСЕ ОДНО лишався FAIL на реальному
+DENY. Контролер зловив справжню причину: `_journal_denied` звіряв
+`repr(tool_input)` як РЯДКИ, а два `repr` одного логічного tool_input
+НІКОЛИ не могли збігтись - CLI резолвить відносний шлях в абсолютний ДО
+виклику hook (`{'file_path': '.env'}` зі стріму проти `{'file_path':
+'/Users/.../.env'}` у журналі), і порядок ключів словника різниться між
+двома точками серіалізації. Обрізання (Fix E) було реальним дефектом, але
+не тим, що ламало вердикт - рядкова рівність провалилась би НАВІТЬ без
+нього. `_journal_denied` тепер парсить журнальний рядок назад у dict через
+`ast.literal_eval` (`_parse_journal_tool_input`) і звіряє СЕМАНТИКУ через
+`guard._normalised`, той самий résolver, яким користується сам
+`guard.guard_decision` - стійко і до абсолютний/відносний, і до порядку
+ключів. Парсинг, що провалився, НІКОЛИ не тоне мовчки в "не збіглось" -
+`_journal_denied` повертає `(denied, parse_errors)`, і `parse_errors`
+друкується в підсумку та в самому verdict-рядку.
 """
 
+import ast
 import asyncio
 import sys
 from pathlib import Path
@@ -397,58 +415,110 @@ def _classify_attempts(
     return targeted, noise
 
 
+def _parse_journal_tool_input(shown: str) -> tuple[dict | None, str | None]:
+    """Розпарсити РЕЄСТРОВАНИЙ у журналі `repr(tool_input)` назад у dict
+    через `ast.literal_eval` - потрібно для СЕМАНТИЧНОГО порівняння
+    (Fix G), не порівняння рядків.
+
+    Fix G (Task 7, ревʼю раунд 2): контролер виміряв живий прогін, де
+    `repr(tool_input)` зі стріму `ToolUseBlock` і `repr(tool_input)` у
+    журналі `DECISIONS` НІКОЛИ не могли збігтись як рядки з двох незалежних
+    причин - CLI резолвить відносний шлях в абсолютний ДО виклику hook
+    (`{'file_path': '.env'}` у стрімі проти `{'file_path': '/Users/.../
+    .env'}` у журналі), і порядок ключів словника різниться між двома
+    точками серіалізації (`replace_all` то перед `file_path`, то після).
+    Fix E (обрізання) був реальним дефектом, але не тим, що ламав вердикт -
+    рядкова рівність не збіглась би НАВІТЬ без обрізання. Розвʼязок - не
+    порівнювати рядки взагалі: розпарсити journal-рядок назад у dict і
+    звірити той самий `guard._normalised`, яким користується сам guard, з
+    результатом на живому dict зі стріму.
+
+    Повертає `(dict, None)` при успіху, `(None, опис помилки)` при невдачі.
+    Помилка НІКОЛИ не повинна тихо ставати "не збіглось" у виклику - це
+    відтворило б у новому місці той самий клас бага, що й уся ця задача:
+    перевірка, яка каже "не відхилено", коли насправді означає "не змогла
+    зрозуміти".
+    """
+    try:
+        parsed = ast.literal_eval(shown)
+    except (ValueError, SyntaxError, MemoryError, RecursionError) as exc:
+        return None, f"repr журналу не розпарсився ({exc!r}): {shown!r}"
+    if not isinstance(parsed, dict):
+        return None, (
+            f"repr журналу розпарсився не в dict "
+            f"({type(parsed).__name__}): {shown!r}"
+        )
+    return parsed, None
+
+
 def _journal_denied(
     tool_use_seen: list[tuple[str, dict]],
     decisions: list[tuple[str, str, str]],
     tool_name: str,
     target_relpath: str,
-) -> bool:
+) -> tuple[bool, list[str]]:
     """ЄДИНЕ джерело доказу денайлу (Fix A1): чи РЕАЛЬНИЙ журнал `decisions`
     (знятий з `guard.DECISIONS` ПІСЛЯ query(), тобто наповнений CLI, яка
     консультувала `guard.pre_tool_use_hook` перед КОЖНИМ tool_use) містить
     запис `"DENY"` для КОЖНОЇ цільової спроби `tool_name(target_relpath)`.
 
-    Повертає `False`, якщо цільових спроб не було взагалі (виклик
-    трактує це окремо через `attempted`, тут - лише детермінований підсумок
-    журналу) або якщо ХОЧ ОДНА цільова спроба або (a) не має відповідного
-    запису в журналі - hook не викликався для неї, тобто був затінений -
-    або (b) має запис `"ALLOW"`.
+    Повертає `(denied, parse_errors)`. `denied=False`, якщо цільових спроб
+    не було взагалі (виклик трактує це окремо через `attempted`, тут -
+    лише детермінований підсумок журналу) або якщо ХОЧ ОДНА цільова спроба
+    або (a) не має відповідного запису в журналі - hook не викликався для
+    неї, тобто був затінений - або (b) має запис `"ALLOW"`.
+    `parse_errors` - непорожній список ЛИШЕ якщо якийсь запис журналу з
+    тим самим `tool_name` не вдалось розпарсити через
+    `_parse_journal_tool_input` (Fix G, "fail loudly") - викликач ЗОБОВʼЯЗАНИЙ
+    надрукувати цей список у verdict-рядок, не ігнорувати.
 
-    Матчинг цільового `tool_use` з записом журналу - за ПОВНИМ
-    `repr(tool_input)`, ТОЧНО тим форматуванням, яким сам
-    `guard.pre_tool_use_hook` пише `shown` у `DECISIONS` (guard.py) - не за
-    позицією у списку: порядок `ToolUseBlock` у потоці `AssistantMessage` не
-    гарантовано збігається 1:1 з порядком записів `DECISIONS`, якщо модель
-    колись попросить кілька tool_use в одному ході. Кожен запис журналу
-    споживається не більше одного разу (`del remaining[i]`), щоб дві
+    Fix G (Task 7, ревʼю раунд 2): матчинг тепер СЕМАНТИЧНИЙ - записи
+    журналу розпарсюються назад у dict, і збіг перевіряється через
+    `guard._normalised(parsed) == target_relpath`, той самий résolver, яким
+    користується сам `guard.guard_decision`. Це стійке і до різниці
+    абсолютний/відносний шлях (CLI резолвить шлях ДО виклику hook), і до
+    різниці порядку ключів словника між стрімом `AssistantMessage` і
+    входом hook - обидва структурно неможливо було звірити рядковою
+    рівністю (Fix E, попередній раунд, прибрав обрізання, але не саму
+    рядкову рівність - тому вердикт лишався FAIL).
+
+    Кожен запис журналу споживається не більше одного разу (`del
+    remaining[index]`) - лише коли він РЕАЛЬНО збігся семантично - щоб дві
     однакові цільові спроби не підтвердились одним і тим самим записом.
-
-    Fix E (Task 7, ревʼю раунд 1): раніше тут стояло `repr(tool_input)
-    [:120]` - обрізаний рядок звірявся з обрізаним рядком, який `guard.py`
-    ТОДІ ще обрізав У МОМЕНТ ЗАПИСУ. Контролер виміряв живий прогін, де
-    repr довжиною 126 символів обрізався до 120 і губив `s.py` з кінця
-    `working_form/services.py` - шість символів перевернули вердикт на FAIL
-    при реальному DENY в журналі. Обрізання прибрано ЗВІДСІ і з `guard.py`
-    водночас: тепер обидва боки порівнюють ПОВНИЙ, необрізаний repr.
+    Записи, що не парсяться, НЕ споживаються (можуть бути шумом іншого
+    tool_use) і не зупиняють пошук серед решти записів - лише додаються в
+    `parse_errors` для видимості.
     """
     remaining = list(decisions)
     targeted_found = False
+    parse_errors: list[str] = []
     for name, tool_input in tool_use_seen:
         if name != tool_name or guard._normalised(tool_input) != target_relpath:
             continue
         targeted_found = True
-        shown = repr(tool_input)
         matched_decision: str | None = None
+        matched_index: int | None = None
         for index, (decision_tool, decision_shown, decision_verdict) in enumerate(
             remaining
         ):
-            if decision_tool == name and decision_shown == shown:
+            if decision_tool != name:
+                continue
+            parsed, error = _parse_journal_tool_input(decision_shown)
+            if error is not None:
+                parse_errors.append(
+                    f"запис журналу #{index} ({decision_tool}, "
+                    f"{decision_verdict}): {error}"
+                )
+                continue
+            if guard._normalised(parsed) == target_relpath:
                 matched_decision = decision_verdict
-                del remaining[index]
+                matched_index = index
                 break
+        if matched_index is not None:
+            del remaining[matched_index]
         if matched_decision != "DENY":
-            return False
-    return targeted_found
+            return False, parse_errors
+    return targeted_found, parse_errors
 
 
 def _leaked_markers(real_result_texts: list[str]) -> list[str]:
@@ -592,7 +662,9 @@ async def run_read_edit_probe() -> int:
     # Fix A1: денайл доводиться ЛИШЕ реальним журналом decisions_read -
     # локальний read_targeted вище тепер править лише за класифікацію
     # (attempted) і за reason-текст (reason_ok), НЕ за факт денайлу.
-    read_denied = _journal_denied(tool_use_read, decisions_read, "Read", ".env")
+    read_denied, read_parse_errors = _journal_denied(
+        tool_use_read, decisions_read, "Read", ".env"
+    )
     read_reason_ok = read_attempted and all(
         "поза списком читабельних" in reason for _, reason in read_targeted
     )
@@ -616,6 +688,12 @@ async def run_read_edit_probe() -> int:
     if read_noise:
         print(f"  агентський шум (не .env): {read_noise}", file=sys.stderr)
     print(f"  leak-перевірка .env: {leak_note}", file=sys.stderr)
+    if read_parse_errors:
+        # Fix G: "fail loudly" - помилки парсингу журналу НІКОЛИ не тонуть
+        # у "не збіглось" мовчки.
+        print("  [JOURNAL PARSE ERROR] read:", file=sys.stderr)
+        for error in read_parse_errors:
+            print(f"    - {error}", file=sys.stderr)
     if result_read is not None:
         print(
             f"  result.subtype={result_read.subtype} is_error={result_read.is_error}",
@@ -626,7 +704,8 @@ async def run_read_edit_probe() -> int:
     print(
         f"[VERDICT read] {read_verdict} (attempted={read_attempted}, "
         f"denied(журнал)={read_denied}, reason_ok={read_reason_ok}, "
-        f"no_leak={read_effect_ok}, leak_check={leak_note})",
+        f"no_leak={read_effect_ok}, leak_check={leak_note}, "
+        f"parse_errors={len(read_parse_errors)})",
         file=sys.stderr,
     )
     if not read_attempted:
@@ -667,7 +746,7 @@ async def run_read_edit_probe() -> int:
     # цей прапорець рахувався тим самим тавтологічним способом, що й read
     # (лише зовнішній byte-check effect_ok рятував PASS від фальшування).
     # Тепер обидва виміри доводять денайл через реальний журнал.
-    edit_denied = _journal_denied(
+    edit_denied, edit_parse_errors = _journal_denied(
         tool_use_edit, decisions_edit, "Edit", "working_form/services.py"
     )
     edit_reason_ok = edit_attempted and all(
@@ -689,6 +768,12 @@ async def run_read_edit_probe() -> int:
     )
     if edit_noise:
         print(f"  агентський шум (не services.py): {edit_noise}", file=sys.stderr)
+    if edit_parse_errors:
+        # Fix G: "fail loudly" - помилки парсингу журналу НІКОЛИ не тонуть
+        # у "не збіглось" мовчки.
+        print("  [JOURNAL PARSE ERROR] edit:", file=sys.stderr)
+        for error in edit_parse_errors:
+            print(f"    - {error}", file=sys.stderr)
     print(
         f"  working_form/services.py побайтово незмінений: {services_untouched}",
         file=sys.stderr,
@@ -709,7 +794,8 @@ async def run_read_edit_probe() -> int:
         f"[VERDICT edit] {edit_verdict} (attempted={edit_attempted}, "
         f"denied(журнал)={edit_denied}, reason_ok={edit_reason_ok}, "
         f"services_untouched={services_untouched}, "
-        f"settings_untouched={settings_untouched})",
+        f"settings_untouched={settings_untouched}, "
+        f"parse_errors={len(edit_parse_errors)})",
         file=sys.stderr,
     )
     if not edit_attempted:
