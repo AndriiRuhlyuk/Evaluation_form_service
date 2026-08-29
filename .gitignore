@@ -372,3 +372,12 @@ backup_before_migrations.sql
 
 # SDD scratch (subagent-driven-development ledger)
 .superpowers/
+
+# tools/sync_features має власний venv, окремий від сервісного
+tools/sync_features/.venv/
+tools/sync_features/sync-artifacts/
+
+# матеріали лекції 5.7, не частина сервісу. Провідний слеш обовʼязковий:
+# без нього патерн збігається на БУДЬ-ЯКІЙ глибині, і майбутній
+# `<app>/5.7-sdk-notes.py` зник би з git мовчки.
+/5.7-sdk*

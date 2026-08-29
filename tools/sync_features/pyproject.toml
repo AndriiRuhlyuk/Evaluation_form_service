@@ -1,0 +1,16 @@
+[project]
+name = "sync-features"
+version = "0.1.0"
+description = "Агент звіряє Features_list.json з git-історією"
+requires-python = ">=3.11"
+# Important 6 (фінальний раунд ревʼю): версія була незакріплена, а весь
+# інструмент стоїть на ВИМІРЯНИХ внутрішніх деталях 0.2.147. Підлога 0.2.147
+# і стеля <0.3 захищають рівно дві поведінки: (1) `PreToolUse`-контракт
+# `hookSpecificOutput.permissionDecision`/`permissionDecisionReason` - це
+# сама межа безпеки, і її мовчазна зміна дає пісочницю, що перестала кусати;
+# (2) доставку `ResultMessage(is_error=True)` у стрім із `ResultError` на
+# НАСТУПНІЙ ітерації `async for` - на цьому тримаються докази R3c і R5.
+dependencies = ["claude-agent-sdk>=0.2.147,<0.3"]
+
+[tool.setuptools]
+py-modules = ["sync_features", "guard", "gitscan", "verify"]

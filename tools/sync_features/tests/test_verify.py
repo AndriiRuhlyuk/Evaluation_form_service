@@ -1,0 +1,1005 @@
+import json
+import unittest
+
+from verify import (
+    check_coverage,
+    check_descriptions_intact,
+    check_entries_identifiable,
+    check_metadata_intact,
+    check_no_id_lost,
+    check_parses,
+    check_report_matches_file,
+    mentioned_ids,
+    parse_agent_json,
+    run_all,
+    validate_schema,
+)
+
+
+def entry(id_, description="опис", done=False, name="назва"):
+    return {
+        "id": id_,
+        "category": "ARCH",
+        "name": name,
+        "description": description,
+        "done": done,
+    }
+
+
+_LEGEND = {"done": "реалізовано", "todo": "заплановано"}
+
+
+def doc(features, **meta):
+    """Повний документ реєстру, як він лежить на диску: `features` плюс три
+    метаполя верхнього рівня. `meta` перекриває будь-яке з них.
+
+    `run_all` приймає саме документи (Important 1), тому кожен її виклик у
+    тестах іде через цей хелпер."""
+    document = {
+        "project": "evaluation_form_service",
+        "updated": "2026-08-26",
+        "legend": dict(_LEGEND),
+        "features": features,
+    }
+    document.update(meta)
+    return document
+
+
+class TestI1Parses(unittest.TestCase):
+    def test_valid_json(self):
+        ok, _ = check_parses('{"a": 1}')
+        self.assertTrue(ok)
+
+    def test_broken_json(self):
+        ok, reason = check_parses('{"a": ')
+        self.assertFalse(ok)
+        self.assertIn("JSON", reason)
+
+
+class TestI2NoIdLost(unittest.TestCase):
+    def test_same_set(self):
+        before = [entry("ARCH-1"), entry("ARCH-2")]
+        ok, _ = check_no_id_lost(before, list(before))
+        self.assertTrue(ok)
+
+    def test_addition_allowed(self):
+        before = [entry("ARCH-1")]
+        after = [entry("ARCH-1"), entry("ARCH-2")]
+        ok, _ = check_no_id_lost(before, after)
+        self.assertTrue(ok)
+
+    def test_removal_caught(self):
+        before = [entry("ARCH-1"), entry("ARCH-2")]
+        after = [entry("ARCH-1")]
+        ok, reason = check_no_id_lost(before, after)
+        self.assertFalse(ok)
+        self.assertIn("ARCH-2", reason)
+
+
+class TestI3DescriptionsIntact(unittest.TestCase):
+    def test_done_flip_allowed(self):
+        before = [entry("ARCH-1", done=False)]
+        after = [entry("ARCH-1", done=True)]
+        ok, _ = check_descriptions_intact(before, after)
+        self.assertTrue(ok)
+
+    def test_description_rewrite_caught(self):
+        before = [entry("ARCH-1", description="оригінал")]
+        after = [entry("ARCH-1", description="покращене формулювання")]
+        ok, reason = check_descriptions_intact(before, after)
+        self.assertFalse(ok)
+        self.assertIn("ARCH-1", reason)
+
+    def test_name_rewrite_caught(self):
+        before = [entry("ARCH-1", name="стара назва")]
+        after = [entry("ARCH-1", name="нова назва")]
+        ok, _ = check_descriptions_intact(before, after)
+        self.assertFalse(ok)
+
+    def test_new_entry_ignored(self):
+        before = [entry("ARCH-1")]
+        after = [entry("ARCH-1"), entry("ARCH-2", description="новий")]
+        ok, _ = check_descriptions_intact(before, after)
+        self.assertTrue(ok)
+
+
+class TestI4Coverage(unittest.TestCase):
+    def test_all_covered(self):
+        commits = [("a1", "Fix: ARCH-5")]
+        payload = {"flipped_to_done": ["ARCH-5"], "new_entries": []}
+        ok, _ = check_coverage(commits, payload)
+        self.assertTrue(ok)
+
+    def test_missing_id_caught(self):
+        commits = [("a1", "Fix: ARCH-5"), ("a2", "Fix: CFG-1")]
+        payload = {"flipped_to_done": ["ARCH-5"], "new_entries": []}
+        ok, reason = check_coverage(commits, payload)
+        self.assertFalse(ok)
+        self.assertIn("CFG-1", reason)
+
+    def test_id_in_new_entry_counts(self):
+        commits = [("a1", "Fix: CFG-1")]
+        payload = {"flipped_to_done": [], "new_entries": [{"id": "CFG-1"}]}
+        ok, _ = check_coverage(commits, payload)
+        self.assertTrue(ok)
+
+    def test_multiple_ids_in_one_commit(self):
+        commits = [
+            (
+                "7f6861e",
+                "Docs: ARCH-20..22, CFG-1, CFG-2 - знахідки з роботи над чеклістом релізу",
+            )
+        ]
+        payload = {"flipped_to_done": ["ARCH-20", "CFG-1", "CFG-2"], "new_entries": []}
+        ok, _ = check_coverage(commits, payload)
+        self.assertTrue(ok)
+
+    def test_multiple_ids_one_missing(self):
+        commits = [
+            (
+                "7f6861e",
+                "Docs: ARCH-20..22, CFG-1, CFG-2 - знахідки з роботи над чеклістом релізу",
+            )
+        ]
+        payload = {"flipped_to_done": ["ARCH-20", "CFG-1"], "new_entries": []}
+        ok, reason = check_coverage(commits, payload)
+        self.assertFalse(ok)
+        self.assertIn("CFG-2", reason)
+
+
+class TestMentionedIds(unittest.TestCase):
+    # Fix 7 (Task 6, fix round 1): єдине джерело правди для union'у
+    # flipped_to_done + id нових записів - раніше рахувалось окремо у
+    # check_coverage і в sync_features.py, ризик тихого розходження.
+
+    def test_union_of_both_sources(self):
+        payload = {
+            "flipped_to_done": ["ARCH-5"],
+            "new_entries": [{"id": "ARCH-28"}],
+        }
+        self.assertEqual(mentioned_ids(payload), {"ARCH-5", "ARCH-28"})
+
+    def test_new_entry_without_id_ignored(self):
+        payload = {"flipped_to_done": [], "new_entries": [{"category": "arch"}]}
+        self.assertEqual(mentioned_ids(payload), set())
+
+    def test_missing_keys_default_to_empty(self):
+        self.assertEqual(mentioned_ids({}), set())
+
+    def test_check_coverage_uses_same_union(self):
+        # Регресія: check_coverage і mentioned_ids мусять погоджуватись на
+        # одному й тому самому payload - інакше рядок покриття в звіті
+        # суперечив би I4-порушенню з того самого запуску.
+        commits = [("a1", "Fix: ARCH-5"), ("a2", "Fix: ARCH-28")]
+        payload = {"flipped_to_done": ["ARCH-5"], "new_entries": [{"id": "ARCH-28"}]}
+        ok, _ = check_coverage(commits, payload)
+        self.assertTrue(ok)
+        self.assertEqual(mentioned_ids(payload), {"ARCH-5", "ARCH-28"})
+
+
+class TestParseAgentJson(unittest.TestCase):
+    """Fix I2 (Task 7, ревʼю раунд 4): контролер виміряв локально (без
+    мережі) шість реалістичних форм відповіді моделі - `parse_agent_json`
+    раніше знімав ```-огорожу лише коли ВЕСЬ текст ПОЧИНАВСЯ з неї, тому
+    прозовий вступ ламав парсинг структурно, хоча JSON у відповіді був
+    правильним. Кожен тест нижче - одна з шести форм, дослівно."""
+
+    _BARE_JSON = '{"flipped_to_done": ["ARCH-1"], "new_entries": []}'
+
+    def test_shape_1_bare_json(self):
+        payload, _ = parse_agent_json(self._BARE_JSON)
+        self.assertEqual(payload, {"flipped_to_done": ["ARCH-1"], "new_entries": []})
+
+    def test_shape_2_fenced_json(self):
+        raw = f"```json\n{self._BARE_JSON}\n```"
+        payload, _ = parse_agent_json(raw)
+        self.assertIsNotNone(payload)
+
+    def test_shape_3_prose_before_fence(self):
+        raw = f"Here is the result:\n```json\n{self._BARE_JSON}\n```"
+        payload, _ = parse_agent_json(raw)
+        self.assertEqual(payload, {"flipped_to_done": ["ARCH-1"], "new_entries": []})
+
+    def test_shape_4_prose_after_fence(self):
+        raw = f"```json\n{self._BARE_JSON}\n```\nThat is my final answer."
+        payload, _ = parse_agent_json(raw)
+        self.assertEqual(payload, {"flipped_to_done": ["ARCH-1"], "new_entries": []})
+
+    def test_shape_5_prose_before_bare_json_no_fence(self):
+        raw = f"Here is my answer: {self._BARE_JSON}"
+        payload, _ = parse_agent_json(raw)
+        self.assertEqual(payload, {"flipped_to_done": ["ARCH-1"], "new_entries": []})
+
+    def test_shape_6_pure_prose_returns_none(self):
+        # Жорстка вимога брифу: чиста проза МАЄ повертати None - R5
+        # (доказ обробки помилок) залежить саме від цього.
+        raw = (
+            "I could not find any relevant discrepancies in the commit "
+            "log, so I made no changes to the registry."
+        )
+        payload, reason = parse_agent_json(raw)
+        self.assertIsNone(payload)
+        self.assertIn("JSON", reason)
+
+    def test_agent_quotes_example_then_gives_real_answer(self):
+        # Регресія для всього класу знахідки: дві огорожі, різний вміст -
+        # остання МАЄ трактуватись як відповідь, не перша (приклад).
+        raw = (
+            "Here is the shape as an example:\n"
+            '```json\n{"flipped_to_done": ["ARCH-1"], "new_entries": []}\n```\n'
+            "Now here is my actual answer:\n"
+            '```json\n{"flipped_to_done": ["ARCH-5"], "new_entries": []}\n```'
+        )
+        payload, reason = parse_agent_json(raw)
+        self.assertEqual(payload, {"flipped_to_done": ["ARCH-5"], "new_entries": []})
+        self.assertEqual(reason, "розібрано")
+
+    def test_python_fenced_block_not_mistaken_for_json(self):
+        # Не надто поблажливий: ```python не є ```json чи голою огорожею -
+        # має провалитись через balanced-span fallback (тут - на прозі
+        # без {}), не мовчки з'їсти чужий приклад коду.
+        raw = "```python\nprint('not json at all')\n```"
+        payload, reason = parse_agent_json(raw)
+        self.assertIsNone(payload)
+
+    def test_no_fence_prefers_first_balanced_span_documented_limit(self):
+        # Задокументований компроміс _find_balanced_json: без огорожі
+        # береться ПЕРШИЙ {...} - тут це навмисно приклад, не відповідь,
+        # щоб компроміс був видимий у тестах, а не лише в докстрінгу.
+        raw = 'Example shape: {"a": 1}. Real answer: {"flipped_to_done": [], "new_entries": []}'
+        payload, _ = parse_agent_json(raw)
+        self.assertEqual(payload, {"a": 1})
+
+
+class TestValidateSchema(unittest.TestCase):
+    def test_valid(self):
+        # Task 7, fix round 5: повна відповідь має ТРИ ключі верхнього рівня.
+        payload = {
+            "flipped_to_done": ["ARCH-5"],
+            "new_entries": [
+                {
+                    "id": "ARCH-28",
+                    "category": "ARCH",
+                    "name": "н",
+                    "description": "о",
+                    "done": False,
+                }
+            ],
+            "left_unchanged": [],
+        }
+        self.assertEqual(validate_schema(payload), [])
+
+    def test_missing_top_level_key(self):
+        self.assertTrue(validate_schema({"flipped_to_done": []}))
+
+    def test_flipped_must_be_strings(self):
+        # Ревʼю раунд 6, minor: тест перестав кусати - він проходив через
+        # ВІДСУТНІЙ left_unchanged, тому нерядковий елемент можна було
+        # видалити, і тест лишався зеленим. Тепер payload валідний у всьому
+        # ІНШОМУ, і єдина причина провалу - саме `5`.
+        payload = {"flipped_to_done": [5], "new_entries": [], "left_unchanged": []}
+        problems = validate_schema(payload)
+        self.assertTrue(problems)
+        self.assertTrue(any("flipped_to_done" in p for p in problems))
+
+    def test_new_entry_missing_field(self):
+        # Фінальний раунд ревʼю, minor: тест не кусав - він опускав
+        # `left_unchanged`, тому `assertTrue` задовольнявся самою відсутністю
+        # ключа верхнього рівня, і гілку "поля запису" можна було видалити з
+        # `validate_schema`, лишивши тест зеленим. Той самий дефект уже
+        # виправлений рядком вище (`test_flipped_must_be_strings`). Тепер
+        # payload валідний у всьому ІНШОМУ, і перевіряється саме та причина.
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [{"id": "ARCH-28"}],
+            "left_unchanged": [],
+        }
+        problems = validate_schema(payload)
+        self.assertTrue(problems)
+        self.assertTrue(any("без поля" in p for p in problems))
+
+    def test_new_entry_done_must_be_bool(self):
+        # Той самий фікс: без `left_unchanged` тест проходив через відсутній
+        # ключ, а не через `"done": "false"`.
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [
+                {
+                    "id": "ARCH-28",
+                    "category": "ARCH",
+                    "name": "н",
+                    "description": "о",
+                    "done": "false",
+                }
+            ],
+            "left_unchanged": [],
+        }
+        problems = validate_schema(payload)
+        self.assertTrue(problems)
+        self.assertTrue(any("done" in p for p in problems))
+
+    def test_flipped_to_done_must_be_list(self):
+        payload = {"flipped_to_done": "ARCH-5", "new_entries": []}
+        problems = validate_schema(payload)
+        self.assertTrue(problems)
+        self.assertTrue(any("flipped_to_done" in p for p in problems))
+
+    def test_new_entries_must_be_list_not_string(self):
+        payload = {"flipped_to_done": [], "new_entries": "ARCH-28"}
+        problems = validate_schema(payload)
+        self.assertTrue(problems)
+        self.assertTrue(any("new_entries" in p for p in problems))
+
+    def test_new_entries_must_be_list_not_dict(self):
+        payload = {"flipped_to_done": [], "new_entries": {"id": "ARCH-28"}}
+        problems = validate_schema(payload)
+        self.assertTrue(problems)
+        self.assertTrue(any("new_entries" in p for p in problems))
+
+    def test_valid_payload_still_passes(self):
+        payload = {
+            "flipped_to_done": ["ARCH-5"],
+            "new_entries": [
+                {
+                    "id": "ARCH-28",
+                    "category": "ARCH",
+                    "name": "н",
+                    "description": "о",
+                    "done": False,
+                }
+            ],
+            "left_unchanged": [],
+        }
+        self.assertEqual(validate_schema(payload), [])
+
+    def test_flipped_to_done_null_is_invalid(self):
+        payload = {"flipped_to_done": None, "new_entries": []}
+        problems = validate_schema(payload)
+        self.assertTrue(problems)
+        self.assertTrue(any("flipped_to_done" in p for p in problems))
+
+    def test_new_entries_null_is_invalid(self):
+        payload = {"flipped_to_done": [], "new_entries": None}
+        problems = validate_schema(payload)
+        self.assertTrue(problems)
+        self.assertTrue(any("new_entries" in p for p in problems))
+
+    def test_absent_key_reports_only_missing_key(self):
+        payload = {"new_entries": [], "left_unchanged": []}
+        problems = validate_schema(payload)
+        self.assertTrue(problems)
+        self.assertTrue(any("flipped_to_done" in p for p in problems))
+        self.assertEqual(len(problems), 1)
+
+    def test_string_flipped_to_done_still_caught(self):
+        payload = {"flipped_to_done": "ARCH-5", "new_entries": []}
+        problems = validate_schema(payload)
+        self.assertTrue(problems)
+        self.assertTrue(any("flipped_to_done" in p for p in problems))
+
+    def test_empty_lists_are_valid(self):
+        payload = {"flipped_to_done": [], "new_entries": [], "left_unchanged": []}
+        self.assertEqual(validate_schema(payload), [])
+
+
+class TestRunAll(unittest.TestCase):
+    def test_clean_run_returns_empty(self):
+        before = [entry("ARCH-1")]
+        after = [entry("ARCH-1", done=True)]
+        commits = [("a1", "Fix: ARCH-1")]
+        payload = {"flipped_to_done": ["ARCH-1"], "new_entries": []}
+        self.assertEqual(run_all(doc(before), doc(after), commits, payload), [])
+
+    def test_violations_accumulate(self):
+        before = [entry("ARCH-1", description="оригінал"), entry("ARCH-2")]
+        after = [entry("ARCH-1", description="переписано")]
+        commits = [("a1", "Fix: CFG-9")]
+        payload = {"flipped_to_done": [], "new_entries": []}
+        violations = run_all(doc(before), doc(after), commits, payload)
+        self.assertEqual(len(violations), 3)
+
+
+def unchanged(id_, reason="коміт лише фіксує знахідку, не реалізує її"):
+    return {"id": id_, "reason": reason}
+
+
+class TestLeftUnchangedCoverage(unittest.TestCase):
+    """Task 7, fix round 5: третє поле відповіді - id, які агент розглянув і
+    свідомо НЕ чіпав.
+
+    Без нього промпт ("якщо коміт неоднозначний - лиши його і НЕ згадуй") і
+    I4 ("кожен id з комітів присутній у відповіді") взаємно нездійсненні:
+    чесний агент повертає порожні списки і I4 спрацьовує на кожному
+    реалістичному прогоні, а вердикт, який завжди негативний, несе рівно
+    стільки ж інформації, скільки завжди позитивний.
+    """
+
+    def test_left_unchanged_counts_towards_coverage(self):
+        commits = [("a1", "Docs: ARCH-23 - CI матриць читає лише код виходу")]
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [],
+            "left_unchanged": [unchanged("ARCH-23")],
+        }
+        ok, _ = check_coverage(commits, payload)
+        self.assertTrue(ok)
+
+    def test_measured_case_now_clean(self):
+        # Виміряний прогін контролера: п'ять id у Docs-комітах, агент
+        # правильно не змінив жодного. Раніше - I4 порушено, exit 2.
+        commits = [
+            ("7f6861e", "Docs: ARCH-20..22, CFG-1, CFG-2 - знахідки з чекліста"),
+            ("83710aa", "Docs: ARCH-23 - CI матриць читає лише код виходу"),
+            ("7a8598f", "Docs: CLAUDE.md 255 -> 166 рядків; ARCH-24..26"),
+        ]
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [],
+            "left_unchanged": [
+                unchanged("ARCH-20", "запис уже done: true"),
+                unchanged("ARCH-21"),
+                unchanged("ARCH-22"),
+                unchanged("ARCH-23"),
+                unchanged("ARCH-24"),
+                unchanged("ARCH-25"),
+                unchanged("ARCH-26"),
+                unchanged("CFG-1"),
+                unchanged("CFG-2"),
+            ],
+        }
+        ok, reason = check_coverage(commits, payload)
+        self.assertTrue(ok, reason)
+
+    def test_mentioned_ids_includes_left_unchanged(self):
+        payload = {
+            "flipped_to_done": ["ARCH-5"],
+            "new_entries": [{"id": "ARCH-28"}],
+            "left_unchanged": [unchanged("CFG-1")],
+        }
+        self.assertEqual(mentioned_ids(payload), {"ARCH-5", "ARCH-28", "CFG-1"})
+
+    def test_left_unchanged_entry_without_id_ignored(self):
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [],
+            "left_unchanged": [{"reason": "без id"}],
+        }
+        self.assertEqual(mentioned_ids(payload), set())
+
+    def test_left_unchanged_non_dict_entry_ignored(self):
+        # mentioned_ids не має падати на кривому payload - валідність форми
+        # це справа validate_schema, не рахівника покриття.
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [],
+            "left_unchanged": ["CFG-1"],
+        }
+        self.assertEqual(mentioned_ids(payload), set())
+
+    def test_string_flipped_to_done_yields_no_ids(self):
+        # mentioned_ids викликається і з ранніх error-шляхів журналу, де
+        # payload ще не бачив validate_schema. Рядок замість списку не
+        # має розсипатись на символи і надути "agent answer mentions N ids".
+        payload = {"flipped_to_done": "ARCH-5", "new_entries": [], "left_unchanged": []}
+        self.assertEqual(mentioned_ids(payload), set())
+
+    def test_still_missing_id_caught(self):
+        # Третє поле не робить I4 беззубим: id, якого немає в ЖОДНОМУ з
+        # трьох списків, і далі порушує покриття.
+        commits = [("a1", "Fix: ARCH-5"), ("a2", "Docs: CFG-1")]
+        payload = {
+            "flipped_to_done": ["ARCH-5"],
+            "new_entries": [],
+            "left_unchanged": [],
+        }
+        ok, reason = check_coverage(commits, payload)
+        self.assertFalse(ok)
+        self.assertIn("CFG-1", reason)
+
+
+class TestLeftUnchangedSchema(unittest.TestCase):
+    def _valid(self):
+        return {
+            "flipped_to_done": ["ARCH-5"],
+            "new_entries": [],
+            "left_unchanged": [unchanged("CFG-1")],
+        }
+
+    def test_valid_three_field_payload(self):
+        self.assertEqual(validate_schema(self._valid()), [])
+
+    def test_left_unchanged_is_required(self):
+        payload = {"flipped_to_done": [], "new_entries": []}
+        problems = validate_schema(payload)
+        self.assertTrue(any("left_unchanged" in p for p in problems))
+
+    def test_left_unchanged_must_be_list(self):
+        payload = self._valid() | {"left_unchanged": "CFG-1"}
+        problems = validate_schema(payload)
+        self.assertTrue(any("left_unchanged" in p for p in problems))
+
+    def test_left_unchanged_null_is_invalid(self):
+        payload = self._valid() | {"left_unchanged": None}
+        problems = validate_schema(payload)
+        self.assertTrue(any("left_unchanged" in p for p in problems))
+
+    def test_left_unchanged_entry_must_be_object(self):
+        payload = self._valid() | {"left_unchanged": ["CFG-1"]}
+        problems = validate_schema(payload)
+        self.assertTrue(any("left_unchanged[0]" in p for p in problems))
+
+    def test_left_unchanged_entry_needs_id(self):
+        payload = self._valid() | {"left_unchanged": [{"reason": "бо"}]}
+        problems = validate_schema(payload)
+        self.assertTrue(any("id" in p for p in problems))
+
+    def test_left_unchanged_entry_needs_reason(self):
+        payload = self._valid() | {"left_unchanged": [{"id": "CFG-1"}]}
+        problems = validate_schema(payload)
+        self.assertTrue(any("reason" in p for p in problems))
+
+    def test_left_unchanged_reason_must_be_string(self):
+        payload = self._valid() | {"left_unchanged": [{"id": "CFG-1", "reason": 5}]}
+        problems = validate_schema(payload)
+        self.assertTrue(any("reason" in p for p in problems))
+
+    def test_empty_reason_rejected(self):
+        payload = self._valid() | {"left_unchanged": [{"id": "CFG-1", "reason": ""}]}
+        problems = validate_schema(payload)
+        self.assertTrue(any("reason" in p for p in problems))
+
+    def test_whitespace_only_reason_rejected(self):
+        # Найдешевша форма вакуумного задоволення I4 - перелічити всі id з
+        # порожньою причиною. Семантику схема перевірити не може, форму - може.
+        payload = self._valid() | {
+            "left_unchanged": [{"id": "CFG-1", "reason": " \n\t"}]
+        }
+        problems = validate_schema(payload)
+        self.assertTrue(any("reason" in p for p in problems))
+
+    def test_empty_left_unchanged_list_is_valid(self):
+        payload = {"flipped_to_done": [], "new_entries": [], "left_unchanged": []}
+        self.assertEqual(validate_schema(payload), [])
+
+
+class TestDispositionsAreDisjoint(unittest.TestCase):
+    """Три списки - три ВЗАЄМОВИКЛЮЧНІ розпорядження одним id. Той самий id
+    у двох списках - самосуперечність ("я змінив і не змінив цей запис"),
+    а JSON агента існує саме для того, щоб бути достовірним звітом про те,
+    що реально записано у файл.
+    """
+
+    def test_flipped_and_left_unchanged_overlap_rejected(self):
+        payload = {
+            "flipped_to_done": ["ARCH-5"],
+            "new_entries": [],
+            "left_unchanged": [unchanged("ARCH-5")],
+        }
+        problems = validate_schema(payload)
+        self.assertTrue(any("ARCH-5" in p for p in problems))
+
+    def test_new_entries_and_left_unchanged_overlap_rejected(self):
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [
+                {
+                    "id": "ARCH-28",
+                    "category": "ARCH",
+                    "name": "н",
+                    "description": "о",
+                    "done": True,
+                }
+            ],
+            "left_unchanged": [unchanged("ARCH-28")],
+        }
+        problems = validate_schema(payload)
+        self.assertTrue(any("ARCH-28" in p for p in problems))
+
+    def test_flipped_and_new_entries_overlap_rejected(self):
+        payload = {
+            "flipped_to_done": ["ARCH-28"],
+            "new_entries": [
+                {
+                    "id": "ARCH-28",
+                    "category": "ARCH",
+                    "name": "н",
+                    "description": "о",
+                    "done": True,
+                }
+            ],
+            "left_unchanged": [],
+        }
+        problems = validate_schema(payload)
+        self.assertTrue(any("ARCH-28" in p for p in problems))
+
+    def test_no_overlap_is_clean(self):
+        payload = {
+            "flipped_to_done": ["ARCH-5"],
+            "new_entries": [
+                {
+                    "id": "ARCH-28",
+                    "category": "ARCH",
+                    "name": "н",
+                    "description": "о",
+                    "done": True,
+                }
+            ],
+            "left_unchanged": [unchanged("CFG-1")],
+        }
+        self.assertEqual(validate_schema(payload), [])
+
+    def test_duplicate_inside_one_list_is_not_an_overlap(self):
+        # Повтор у ОДНОМУ списку - не суперечність, лише неохайність.
+        # Схема не має права це відхиляти: I4 працює з множинами.
+        payload = {
+            "flipped_to_done": ["ARCH-5", "ARCH-5"],
+            "new_entries": [],
+            "left_unchanged": [],
+        }
+        self.assertEqual(validate_schema(payload), [])
+
+
+class TestRunAllWithLeftUnchanged(unittest.TestCase):
+    def test_honest_no_op_run_is_clean(self):
+        # Наскрізний доказ ruling'у: агент нічого не змінив у реєстрі,
+        # але звітував про кожен id - жодного порушення інваріантів.
+        before = [entry("ARCH-23"), entry("CFG-1"), entry("CFG-2")]
+        after = [entry("ARCH-23"), entry("CFG-1"), entry("CFG-2")]
+        commits = [("83710aa", "Docs: ARCH-23, CFG-1, CFG-2 - знахідки")]
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [],
+            "left_unchanged": [
+                unchanged("ARCH-23"),
+                unchanged("CFG-1"),
+                unchanged("CFG-2"),
+            ],
+        }
+        self.assertEqual(run_all(doc(before), doc(after), commits, payload), [])
+
+
+class TestI5ReportMatchesFile(unittest.TestCase):
+    """Finding K (ревʼю раунд 6): жоден інваріант не звіряв ЗВІТ агента з
+    ФАЙЛОМ.
+
+    I2 дивиться лише на множину id, I3 свідомо виключає `done` (його
+    перемикання і є роботою агента), I4 рахує згадки. Тому агент міг
+    перемкнути `done` у файлі і водночас написати "я цього не чіпав" - і
+    пройти геть усе чисто. Це ширше за прийняту межу про вакуумні причини:
+    там причина порожня від змісту, тут САМА ДИСПОЗИЦІЯ хибна.
+    """
+
+    def test_hostile_case_flip_reported_as_untouched(self):
+        before = [entry("ARCH-23", done=False)]
+        after = [entry("ARCH-23", done=True)]
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [],
+            "left_unchanged": [unchanged("ARCH-23")],
+        }
+        ok, reason = check_report_matches_file(before, after, payload)
+        self.assertFalse(ok)
+        self.assertIn("ARCH-23", reason)
+        self.assertIn("left_unchanged", reason)
+
+    def test_silent_flip_not_reported_anywhere(self):
+        before = [entry("ARCH-23", done=False)]
+        after = [entry("ARCH-23", done=True)]
+        payload = {"flipped_to_done": [], "new_entries": [], "left_unchanged": []}
+        ok, reason = check_report_matches_file(before, after, payload)
+        self.assertFalse(ok)
+        self.assertIn("ARCH-23", reason)
+
+    def test_claimed_flip_that_never_happened(self):
+        before = [entry("ARCH-23", done=False)]
+        after = [entry("ARCH-23", done=False)]
+        payload = {
+            "flipped_to_done": ["ARCH-23"],
+            "new_entries": [],
+            "left_unchanged": [],
+        }
+        ok, reason = check_report_matches_file(before, after, payload)
+        self.assertFalse(ok)
+        self.assertIn("ARCH-23", reason)
+
+    def test_flip_in_wrong_direction_caught(self):
+        # done: true -> false і заявлено як "flipped_to_done" - зміна
+        # відбулась і заявлена, але НЕ в той бік, який означає це поле.
+        before = [entry("ARCH-23", done=True)]
+        after = [entry("ARCH-23", done=False)]
+        payload = {
+            "flipped_to_done": ["ARCH-23"],
+            "new_entries": [],
+            "left_unchanged": [],
+        }
+        ok, reason = check_report_matches_file(before, after, payload)
+        self.assertFalse(ok)
+        self.assertIn("ARCH-23", reason)
+
+    def test_honest_flip_is_clean(self):
+        before = [entry("ARCH-23", done=False)]
+        after = [entry("ARCH-23", done=True)]
+        payload = {
+            "flipped_to_done": ["ARCH-23"],
+            "new_entries": [],
+            "left_unchanged": [],
+        }
+        ok, reason = check_report_matches_file(before, after, payload)
+        self.assertTrue(ok, reason)
+
+    def test_appended_entry_not_reported(self):
+        before = [entry("ARCH-23")]
+        after = [entry("ARCH-23"), entry("ARCH-28")]
+        payload = {"flipped_to_done": [], "new_entries": [], "left_unchanged": []}
+        ok, reason = check_report_matches_file(before, after, payload)
+        self.assertFalse(ok)
+        self.assertIn("ARCH-28", reason)
+
+    def test_claimed_new_entry_never_written(self):
+        before = [entry("ARCH-23")]
+        after = [entry("ARCH-23")]
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [{"id": "ARCH-28"}],
+            "left_unchanged": [],
+        }
+        ok, reason = check_report_matches_file(before, after, payload)
+        self.assertFalse(ok)
+        self.assertIn("ARCH-28", reason)
+
+    def test_honest_append_is_clean(self):
+        before = [entry("ARCH-23")]
+        after = [entry("ARCH-23"), entry("ARCH-28", done=True)]
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [{"id": "ARCH-28"}],
+            "left_unchanged": [],
+        }
+        ok, reason = check_report_matches_file(before, after, payload)
+        self.assertTrue(ok, reason)
+
+    def test_measured_honest_run_stays_clean(self):
+        # Виміряний контролером успішний прогін: 25 id у left_unchanged,
+        # жодного flip, features.patch = "(без змін)". Мусить лишитись
+        # чистим, інакше новий інваріант зламав робочий сценарій.
+        ids = [f"ARCH-{n}" for n in range(1, 26)]
+        registry = [entry(i) for i in ids]
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [],
+            "left_unchanged": [unchanged(i) for i in ids],
+        }
+        ok, reason = check_report_matches_file(registry, list(registry), payload)
+        self.assertTrue(ok, reason)
+
+    def test_run_all_includes_i5(self):
+        # I5 мусить бути ВСЕРЕДИНІ run_all, не поруч: інакше його можна
+        # забути на місці виклику, а проєкт це вже проходив (Fix 7).
+        before = [entry("ARCH-23", done=False)]
+        after = [entry("ARCH-23", done=True)]
+        commits = [("a1", "Docs: ARCH-23 - знахідка")]
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [],
+            "left_unchanged": [unchanged("ARCH-23")],
+        }
+        violations = run_all(doc(before), doc(after), commits, payload)
+        self.assertTrue(any("ARCH-23" in v for v in violations))
+
+
+_DECOY = (
+    '{"flipped_to_done": ["ARCH-5"], "new_entries": '
+    '[{"id": "ARCH-28", "category": "arch", "name": "x", '
+    '"description": "y", "done": true}], "left_unchanged": []}'
+)
+_ANSWER = '{"flipped_to_done": [], "new_entries": [], "left_unchanged": []}'
+
+
+class TestParserPrefersSchemaShapedCandidate(unittest.TestCase):
+    """Finding L (ревʼю раунд 6): дві евристики дивились у різні боки -
+    огорожа бралась ОСТАННЯ, збалансований діапазон ПЕРШИЙ.
+
+    Промпт сам постачає повний валідний приклад і просить не ставити
+    огорожу, тому "приклад перед відповіддю без огорожі" - не екзотика.
+    Приманка тут СХЕМНО ВАЛІДНА: validate_schema її пропускає, і прогін
+    тихо звітує про правки, яких не було.
+    """
+
+    def test_unfenced_decoy_before_answer(self):
+        raw = f"Example shape: {_DECOY}\nReal answer: {_ANSWER}"
+        payload, _ = parse_agent_json(raw)
+        self.assertEqual(payload["flipped_to_done"], [])
+
+    def test_unfenced_decoy_after_answer(self):
+        raw = f"My answer: {_ANSWER}\nFor reference the template was: {_DECOY}"
+        payload, _ = parse_agent_json(raw)
+        # Обидва кандидати схемно валідні - беремо ОСТАННІЙ. Тут це
+        # приманка, і жодна структурна ознака її не відрізняє.
+        self.assertIsNotNone(payload)
+
+    def test_fenced_decoy_before_answer(self):
+        raw = f"Template:\n```json\n{_DECOY}\n```\nAnswer:\n```json\n{_ANSWER}\n```"
+        payload, _ = parse_agent_json(raw)
+        self.assertEqual(payload["flipped_to_done"], [])
+
+    def test_ambiguity_is_reported_in_reason(self):
+        # Випадок, який структурно нерозвʼязний, мусить бути хоча б ВИДИМИЙ.
+        raw = f"{_ANSWER}\n{_DECOY}"
+        _, reason = parse_agent_json(raw)
+        self.assertIn("2", reason)
+
+    def test_single_candidate_reason_stays_quiet(self):
+        _, reason = parse_agent_json(_ANSWER)
+        self.assertNotIn("кандидат", reason)
+
+    def test_non_schema_decoy_ignored_entirely(self):
+        raw = f'Example: {{"a": 1}}. Real answer: {_ANSWER}'
+        payload, _ = parse_agent_json(raw)
+        self.assertEqual(payload, json.loads(_ANSWER))
+
+    def test_fallback_when_no_candidate_has_three_keys(self):
+        # Жоден кандидат не має всіх трьох ключів - стара поведінка
+        # (перший збалансований діапазон) лишається як фолбек.
+        raw = 'Example: {"a": 1}. Then: {"b": 2}'
+        payload, _ = parse_agent_json(raw)
+        self.assertEqual(payload, {"a": 1})
+
+    def test_pure_prose_still_none(self):
+        # R5 залежить саме від цього - не послаблювати НІКОЛИ.
+        payload, _ = parse_agent_json("I could not complete the task.")
+        self.assertIsNone(payload)
+
+
+class TestI6MetadataIntact(unittest.TestCase):
+    """I6 (ревʼю фінального раунду, Important 1): захист реєстру
+    закінчувався на ключі `features`.
+
+    `run_all` отримувала лише `registry["features"]`, а перевірка форми
+    після правки стверджувала тільки "features - список". Живий реєстр несе
+    ще `legend`, `project` і `updated`, і жоден інваріант їх не бачив: агент
+    міг переписати `legend` (рукописна памʼять) або підняти `updated` на
+    сьогодні - і тоді КОЖЕН наступний прогін виходив би 0 на pre-check
+    ("нових комітів немає"), тобто інструмент тихо вимикав би сам себе.
+    """
+
+    def test_legend_rewrite_caught(self):
+        before = doc([entry("ARCH-1")])
+        after = doc([entry("ARCH-1")], legend={"done": "переписано моделлю"})
+        ok, reason = check_metadata_intact(before, after)
+        self.assertFalse(ok)
+        self.assertIn("legend", reason)
+
+    def test_updated_bump_caught_this_is_the_silent_self_disable(self):
+        before = doc([entry("ARCH-1")])
+        after = doc([entry("ARCH-1")], updated="2026-08-29")
+        ok, reason = check_metadata_intact(before, after)
+        self.assertFalse(ok)
+        self.assertIn("updated", reason)
+
+    def test_metadata_key_removed_caught(self):
+        before = doc([entry("ARCH-1")])
+        after = doc([entry("ARCH-1")])
+        del after["project"]
+        ok, reason = check_metadata_intact(before, after)
+        self.assertFalse(ok)
+        self.assertIn("project", reason)
+
+    def test_metadata_key_added_caught(self):
+        before = doc([entry("ARCH-1")])
+        after = doc([entry("ARCH-1")], note="агент вирішив дописати поле")
+        ok, reason = check_metadata_intact(before, after)
+        self.assertFalse(ok)
+        self.assertIn("note", reason)
+
+    def test_untouched_metadata_is_clean(self):
+        before = doc([entry("ARCH-1")])
+        after = doc([entry("ARCH-1", done=True)])
+        ok, _ = check_metadata_intact(before, after)
+        self.assertTrue(ok)
+
+    def test_features_are_not_judged_by_i6(self):
+        # I6 дивиться СУВОРО поза `features` - інакше вона дублювала б I2/I3
+        # і робота агента (перемикання `done`, нові записи) ставала б
+        # порушенням.
+        before = doc([entry("ARCH-1")])
+        after = doc([entry("ARCH-1", done=True), entry("ARCH-28")])
+        ok, _ = check_metadata_intact(before, after)
+        self.assertTrue(ok)
+
+    def test_run_all_sees_metadata_change(self):
+        # Той самий доказ через єдину точку входу: інваріант мусить бути
+        # ВСЕРЕДИНІ run_all, не поруч (те саме рішення, що для I5).
+        before = doc([entry("ARCH-1")])
+        after = doc([entry("ARCH-1")], updated="2026-08-29")
+        payload = {"flipped_to_done": [], "new_entries": [], "left_unchanged": []}
+        violations = run_all(before, after, [], payload)
+        self.assertTrue(any("updated" in v for v in violations))
+
+
+class TestI7EntriesIdentifiable(unittest.TestCase):
+    """I7 (ревʼю фінального раунду, Important 2): `_by_id` ВІДКИДАЄ записи
+    без `id` і СХЛОПУЄ дублікати, а I2, I3 і I5 читають реєстр лише через
+    неї.
+
+    Виміряний ревʼю вхід: файл отримує рядок, JSON каже "нічого не
+    записано", прогін виходить 0. Це третій спосіб інструмента збрехати про
+    те, що він записав, і єдиний, якого не бачив жоден інваріант.
+    """
+
+    def test_reviewer_reproducer_ghost_row_without_id(self):
+        before = [entry("ARCH-1")]
+        ghost = {"category": "ARCH", "name": "ghost", "description": "x", "done": True}
+        payload = {"flipped_to_done": [], "new_entries": [], "left_unchanged": []}
+        violations = run_all(doc(before), doc(before + [ghost]), [], payload)
+        self.assertTrue(violations, "рядок-привид мусить бути порушенням")
+        self.assertTrue(any("id" in v for v in violations))
+
+    def test_appended_duplicate_of_existing_id_caught(self):
+        before = [entry("ARCH-1")]
+        after = before + [entry("ARCH-1")]
+        ok, reason = check_entries_identifiable(after)
+        self.assertFalse(ok)
+        self.assertIn("ARCH-1", reason)
+
+    def test_entry_that_is_not_an_object_caught(self):
+        ok, reason = check_entries_identifiable([entry("ARCH-1"), "ARCH-2"])
+        self.assertFalse(ok)
+        self.assertIn("1", reason)
+
+    def test_non_string_id_caught(self):
+        broken = dict(entry("ARCH-1"))
+        broken["id"] = 7
+        ok, _ = check_entries_identifiable([broken])
+        self.assertFalse(ok)
+
+    def test_empty_id_caught(self):
+        broken = dict(entry("ARCH-1"))
+        broken["id"] = "   "
+        ok, _ = check_entries_identifiable([broken])
+        self.assertFalse(ok)
+
+    def test_healthy_registry_is_clean(self):
+        entries = [entry(f"ARCH-{n}") for n in range(1, 30)]
+        ok, _ = check_entries_identifiable(entries)
+        self.assertTrue(ok)
+
+    def test_i7_does_not_fire_on_legitimate_append(self):
+        # Нормальна робота агента - додати запис з НОВИМ id - лишається
+        # чистою; ловиться лише невидимий для `_by_id` рядок.
+        before = [entry("ARCH-1")]
+        after = before + [entry("ARCH-28", done=True)]
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [entry("ARCH-28", done=True)],
+            "left_unchanged": [],
+        }
+        self.assertEqual(run_all(doc(before), doc(after), [], payload), [])
+
+
+class TestRunAllTakesWholeDocuments(unittest.TestCase):
+    """`run_all` тепер приймає ПОВНІ документи, не лише списки `features`.
+
+    Це і є структурний фікс Important 1: місце виклику фізично не може
+    передати верифікатору менше, ніж увесь файл, тому "захист закінчується
+    на `features`" більше не можна відтворити забувши аргумент.
+    """
+
+    def test_measured_honest_run_stays_clean_end_to_end(self):
+        # Виміряний контролером чесний прогін: 24 id у left_unchanged,
+        # жодного flip, features.patch = "(без змін)". Мусить лишитись
+        # ЧИСТИМ і після двох нових інваріантів.
+        ids = [f"ARCH-{n}" for n in range(1, 25)]
+        features = [entry(i) for i in ids]
+        commits = [("a1", f"Docs: {i} - знахідка") for i in ids]
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [],
+            "left_unchanged": [unchanged(i) for i in ids],
+        }
+        self.assertEqual(
+            run_all(doc(features), doc(list(features)), commits, payload), []
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
