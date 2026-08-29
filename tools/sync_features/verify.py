@@ -123,18 +123,101 @@ def check_coverage(commits: list[tuple[str, str]], payload: dict) -> tuple[bool,
     return True, "усі id з комітів присутні у відповіді"
 
 
+def check_report_matches_file(
+    before: list[dict], after: list[dict], payload: dict
+) -> tuple[bool, str]:
+    """I5: звіт агента збігається з тим, що реально сталося з файлом.
+
+    Finding K (ревʼю раунд 6): жоден інваріант цього не перевіряв. I2
+    дивиться лише на множину id, I3 СВІДОМО виключає `done` (його
+    перемикання і є роботою агента), I4 рахує згадки. Тому агент міг
+    перемкнути `done` у файлі і водночас написати "я цього не чіпав" - і
+    пройти геть усе чисто, лишивши звіт, який прямо суперечить
+    `features.patch` поруч із ним.
+
+    Це ширше за прийняту межу про вакуумні причини (README, "Відомі межі"):
+    там причина порожня від ЗМІСТУ, тут хибна САМА ДИСПОЗИЦІЯ. Принцип уже
+    був записаний у докстрінгу `_check_dispositions_disjoint` - "єдина
+    робота JSON - бути достовірним звітом про те, що записано у файл" - але
+    його ніщо не забезпечувало.
+
+    Порівнюється рівень ДИСПОЗИЦІЇ, тобто id: які записи змінили `done` і
+    які додались. Значення полів нових записів (`category`, `name`,
+    `description`) з файлом НЕ звіряються - це інша перевірка, за нею немає
+    жодного виміряного провалу, і вигадувати гейт з n=0 - те саме
+    вгадування, через яке `reason` лишився вільним текстом.
+    """
+    before_map = _by_id(before)
+    after_map = _by_id(after)
+    claimed = _ids_from_strings(payload.get("flipped_to_done"))
+    reported_new = _ids_from_objects(payload.get("new_entries"))
+    acknowledged = _ids_from_objects(payload.get("left_unchanged"))
+
+    changed = {
+        id_
+        for id_, original in before_map.items()
+        if id_ in after_map and original.get("done") != after_map[id_].get("done")
+    }
+    appended = set(after_map) - set(before_map)
+
+    problems: list[str] = []
+    for id_ in sorted(changed - claimed):
+        where = (
+            "але звіт відносить його до left_unchanged"
+            if id_ in acknowledged
+            else "але його немає у flipped_to_done"
+        )
+        problems.append(f"{id_}: done змінено у файлі, {where}")
+    for id_ in sorted(claimed - changed):
+        problems.append(
+            f"{id_}: заявлений у flipped_to_done, але у файлі done не змінився"
+        )
+    for id_ in sorted(claimed & changed):
+        if after_map[id_].get("done") is not True:
+            problems.append(
+                f"{id_}: заявлений у flipped_to_done, але у файлі done став не true"
+            )
+    for id_ in sorted(appended - reported_new):
+        problems.append(f"{id_}: доданий у файл, але його немає у new_entries")
+    for id_ in sorted(reported_new - appended):
+        problems.append(f"{id_}: заявлений у new_entries, але у файлі не з'явився")
+
+    if problems:
+        return False, "звіт агента розходиться з файлом: " + "; ".join(problems)
+    return True, "звіт агента збігається з файлом"
+
+
 def run_all(
     before: list[dict],
     after: list[dict],
     commits: list[tuple[str, str]],
     payload: dict,
 ) -> list[str]:
-    """Прогнати всі інваріанти. Порожній список = порядок."""
+    """Прогнати всі інваріанти. Порожній список = порядок.
+
+    I5 (Finding K) стоїть ТУТ, а не поруч у `sync_features.py`, свідомо:
+    `run_all` - єдина точка входу "усе, що знає верифікатор", і перевірку в
+    ній неможливо забути на місці виклику. Проєкт це вже проходив (Fix 7,
+    два незалежні підрахунки одного union'у в різних файлах). Уся потрібна
+    дані вже є в сигнатурі - `before`, `after`, `payload`.
+
+    Порушення I5 дає код виходу 2 ("відпрацював із зауваженнями"), не 1
+    ("зламалось"), з двох причин. По-перше, за змістом це той самий рід
+    результату, що I2 та I3: прогін дійшов до кінця, файл цілий і
+    парситься, і ми маємо ЗНАХІДКУ про те, що сталось - а не аварію
+    інструмента. По-друге, `run_all` НАКОПИЧУЄ порушення, тоді як шляхи з
+    кодом 1 у `main_sync` роблять ранній `return`; зробивши I5 фатальним,
+    ми відібрали б у людини результати I2/I3/I4 того самого прогону саме
+    тоді, коли вони найпотрібніші. Правки у файлі при цьому цілком можуть
+    бути правильними - хибний тут ЗВІТ, і вирішує це ручний перегляд
+    `features.patch`, який і так обовʼязковий.
+    """
     violations: list[str] = []
     for ok, reason in (
         check_no_id_lost(before, after),
         check_descriptions_intact(before, after),
         check_coverage(commits, payload),
+        check_report_matches_file(before, after, payload),
     ):
         if not ok:
             violations.append(reason)
@@ -242,25 +325,105 @@ def _find_balanced_json(text: str) -> str | None:
     return None
 
 
-def parse_agent_json(raw: str) -> tuple[dict | None, str]:
-    """Розібрати відповідь агента: fenced-блок БУДЬ-ДЕ в тексті (Fix I2),
-    інакше найзовнішніший збалансований `{...}`, інакше - весь текст як є
-    (чиста проза дасть звичайну `json.JSONDecodeError` від `json.loads`).
+def _all_json_candidates(text: str) -> list[str]:
+    """Усі шматки тексту, які МОЖУТЬ бути JSON-відповіддю, у порядку появи:
+    вміст кожної огорожі плюс кожен збалансований `{...}` діапазон верхнього
+    рівня.
 
-    Fix I2: пряма проза МУСИТЬ повертати None - R5 (доказ обробки помилок)
-    залежить саме від цього, і надто поблажливий парсер, що знаходить JSON
-    у будь-чому, зламав би робочий guardrail. Коли в тексті немає ЖОДНОЇ
-    огорожі й ЖОДНОЇ `{`, обидва хелпери повертають `None`, і `candidate`
-    лишається повним сирим текстом - `json.loads` на чистій прозі дає ту
-    саму помилку (`Expecting value: line 1 column 1`), що й раніше.
+    Finding L: раніше дві евристики дивились у РІЗНІ боки - огорожа бралась
+    ОСТАННЯ, збалансований діапазон ПЕРШИЙ. Щоб узгодити їх, спершу треба
+    мати повний список кандидатів, а не одразу вибирати по одному з кожної.
+    """
+    found: list[tuple[int, str]] = [
+        (match.start(1), match.group(1).strip())
+        for match in _FENCED_JSON_RE.finditer(text)
+    ]
+
+    index = 0
+    while index < len(text):
+        start = text.find("{", index)
+        if start == -1:
+            break
+        span = _find_balanced_json(text[start:])
+        if span is None:
+            break
+        found.append((start, span))
+        index = start + len(span)
+
+    found.sort(key=lambda pair: pair[0])
+    ordered: list[str] = []
+    for _, candidate in found:
+        if candidate not in ordered:
+            ordered.append(candidate)
+    return ordered
+
+
+def _is_schema_shaped(candidate: str) -> bool:
+    """Чи має кандидат ВСІ три обовʼязкові ключі верхнього рівня.
+
+    Саме це відрізняє відповідь від чужого `{...}`, процитованого поруч.
+    Перевірка навмисно лише про НАЯВНІСТЬ ключів, не про типи всередині:
+    типи - робота `validate_schema`, і кандидат зі схемними ключами, але
+    поганими типами, мусить дійти до неї і бути відхиленим ГУЧНО, а не
+    тихо програти іншому кандидату тут.
+    """
+    try:
+        parsed = json.loads(candidate)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(parsed, dict) and all(
+        key in parsed for key in OUTPUT_SCHEMA["required"]
+    )
+
+
+def parse_agent_json(raw: str) -> tuple[dict | None, str]:
+    """Розібрати відповідь агента.
+
+    Finding L (ревʼю раунд 6): дві евристики суперечили одна одній -
+    `_find_fenced_json` брала ОСТАННЮ огорожу, `_find_balanced_json` -
+    ПЕРШИЙ збалансований діапазон. Ревʼю виміряло наслідок: у тексті
+    "приклад, потім відповідь" БЕЗ огорожі парсер брав ПРИКЛАД, а оскільки
+    приклад із самого промпту схемно валідний, `validate_schema` пропускала
+    його мовчки - і прогін звітував про flip ARCH-5 та новий ARCH-28, яких
+    ніхто не писав. Промпт сам загострює це: він постачає повний валідний
+    приклад і просить НЕ ставити огорожу.
+
+    Тепер правило одне для обох джерел: серед УСІХ кандидатів (кожна
+    огорожа плюс кожен збалансований діапазон) береться ОСТАННІЙ, що має всі
+    три обовʼязкові ключі. "Останній" - бо підсумкова відповідь моделі йде
+    після її роздумів і прикладів.
+
+    Межа цього правила, названа прямо: коли модель дає відповідь, а ПОТІМ
+    відлунює шаблон, обидва кандидати схемно валідні, і жодна структурна
+    ознака їх не розрізняє - буде обрано шаблон. Це не лікується парсером.
+    Лікує це I5 (`check_report_matches_file`): відлунений шаблон заявляє
+    flip і новий запис, яких у файлі немає, тому прогін впаде з
+    порушенням інваріанта замість тихого хибного звіту. Крім того, коли
+    схемних кандидатів БІЛЬШЕ ОДНОГО, це видно в поверненій причині.
+
+    Фолбек - стара поведінка (остання огорожа, інакше перший збалансований
+    діапазон, інакше весь текст) - лишається РІВНО для випадку, коли жоден
+    кандидат не має всіх трьох ключів. Чиста проза й надалі МУСИТЬ давати
+    `None`: кандидатів немає, `candidate` лишається сирим текстом, і
+    `json.loads` дає ту саму помилку, що раніше. R5 залежить саме від цього.
     """
     text = raw.strip()
 
-    candidate = _find_fenced_json(text)
-    if candidate is None:
-        candidate = _find_balanced_json(text)
-    if candidate is None:
-        candidate = text
+    note = ""
+    schema_shaped = [c for c in _all_json_candidates(text) if _is_schema_shaped(c)]
+    if schema_shaped:
+        candidate = schema_shaped[-1]
+        if len(schema_shaped) > 1:
+            note = (
+                f" (схемних кандидатів у тексті: {len(schema_shaped)}, узято "
+                f"останній - перевір, що це відповідь, а не відлунений шаблон)"
+            )
+    else:
+        candidate = _find_fenced_json(text)
+        if candidate is None:
+            candidate = _find_balanced_json(text)
+        if candidate is None:
+            candidate = text
 
     try:
         payload = json.loads(candidate)
@@ -268,7 +431,7 @@ def parse_agent_json(raw: str) -> tuple[dict | None, str]:
         return None, f"агент повернув не JSON: {exc}"
     if not isinstance(payload, dict):
         return None, "агент повернув JSON, але не об'єкт"
-    return payload, "розібрано"
+    return payload, "розібрано" + note
 
 
 def validate_schema(payload: dict) -> list[str]:

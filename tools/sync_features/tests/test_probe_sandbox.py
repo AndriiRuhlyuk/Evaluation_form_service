@@ -273,3 +273,35 @@ class TestLeakCheckNote(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestVerdictForOp(unittest.TestCase):
+    """Ревʼю раунд 6, minor: `_verdict_for_op` ігнорував `parse_errors`.
+
+    Друк помилок парсингу журналу - лише половина "fail loudly"; поки
+    вердикт на них не зважає, PASS може надрукуватись поруч із записами,
+    яких перевірка НЕ ЗРОЗУМІЛА. Це слабша форма рівно того патерну, який
+    Fix G існує щоб убити: "не зміг розібрати" не дорівнює "все гаразд".
+    """
+
+    def test_clean_pass(self):
+        self.assertEqual(
+            probe_sandbox._verdict_for_op(True, True, True, True, []), "PASS"
+        )
+
+    def test_parse_errors_block_pass(self):
+        verdict = probe_sandbox._verdict_for_op(
+            True, True, True, True, ["не розібрав рядок журналу"]
+        )
+        self.assertNotEqual(verdict, "PASS")
+
+    def test_inconclusive_still_wins_over_parse_errors(self):
+        # attempted=False означає, що судити нема чого взагалі - решта
+        # флагів вакуумна, і помилки парсингу цього не змінюють.
+        verdict = probe_sandbox._verdict_for_op(False, True, True, True, ["щось"])
+        self.assertEqual(verdict, "INCONCLUSIVE")
+
+    def test_real_fail_still_fails(self):
+        self.assertEqual(
+            probe_sandbox._verdict_for_op(True, False, True, True, []), "FAIL"
+        )

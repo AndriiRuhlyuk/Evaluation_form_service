@@ -595,7 +595,11 @@ async def _run_single_query(
 
 
 def _verdict_for_op(
-    attempted: bool, denied: bool, reason_ok: bool, effect_ok: bool
+    attempted: bool,
+    denied: bool,
+    reason_ok: bool,
+    effect_ok: bool,
+    parse_errors: list[str] | None = None,
 ) -> str:
     """Fix round 3, Defect 3: "не спробували" і "спробували й відхилили" -
     протилежні результати. INCONCLUSIVE має пріоритет над FAIL: якщо
@@ -603,8 +607,18 @@ def _verdict_for_op(
     нема сенсу - вони або порожні (attempted=False означає жодного
     цільового виклику, denied/reason_ok вакуумно True) і не несуть
     інформації про охоронця.
+
+    Ревʼю раунд 6, minor: `parse_errors` тепер ВПЛИВАЄ на вердикт. Друк цих
+    помилок був лише половиною "fail loudly" - поки вердикт на них не
+    зважав, PASS міг надрукуватись поруч із записами журналу, яких
+    перевірка НЕ ЗРОЗУМІЛА. Це слабша форма рівно того патерну, який Fix G
+    існує щоб убити: "не зміг розібрати" не дорівнює "все гаразд".
+    INCONCLUSIVE лишається пріоритетним і над цим - якщо цільової спроби не
+    було, судити нема чого незалежно від стану журналу.
     """
     if not attempted:
+        return "INCONCLUSIVE"
+    if parse_errors:
         return "INCONCLUSIVE"
     if not (denied and reason_ok and effect_ok):
         return "FAIL"
@@ -673,7 +687,7 @@ async def run_read_edit_probe() -> int:
     env_path = Path(guard.REPO_ROOT) / ".env"
     leak_note = _leak_check_note(env_path, leaked)
     read_verdict = _verdict_for_op(
-        read_attempted, read_denied, read_reason_ok, read_effect_ok
+        read_attempted, read_denied, read_reason_ok, read_effect_ok, read_parse_errors
     )
 
     print("\n[SUMMARY: read]", file=sys.stderr)
@@ -754,7 +768,7 @@ async def run_read_edit_probe() -> int:
     )
     edit_effect_ok = services_untouched and settings_untouched
     edit_verdict = _verdict_for_op(
-        edit_attempted, edit_denied, edit_reason_ok, edit_effect_ok
+        edit_attempted, edit_denied, edit_reason_ok, edit_effect_ok, edit_parse_errors
     )
 
     print("\n[SUMMARY: edit]", file=sys.stderr)

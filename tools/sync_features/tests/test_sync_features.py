@@ -310,6 +310,28 @@ class TestWriteJournal(unittest.TestCase):
         self.assertIn("## Сира відповідь агента", report)
         self.assertIn(raw_text, report)
 
+    def test_raw_text_with_backticks_does_not_break_report_fence(self):
+        # Ревʼю раунд 6, minor: діагностований дефект часто саме "модель
+        # загорнула JSON в огорожу", тому сирий текст ЧАСТО містить ```.
+        # Огорожа звіту мусить бути ДОВШОЮ за будь-який ряд лапок усередині,
+        # інакше секція рветься рівно на найцікавішому випадку.
+        raw_text = '```json\n{"flipped_to_done": []}\n```'
+        sync_features._write_journal(
+            self.out_dir,
+            self.registry_path,
+            '{"features": []}',
+            "2026-08-29-000000",
+            "JSON агента не розпарсився",
+            [],
+            raw_agent_text=raw_text,
+        )
+        report = self._report_text()
+        opening = "````"
+        self.assertIn(opening, report)
+        after = report.split("## Сира відповідь агента", 1)[1]
+        body = after.split(opening)[1]
+        self.assertIn("flipped_to_done", body)
+
     def test_truncate_raw_text_short_untouched(self):
         short = "коротка відповідь агента"
         self.assertEqual(sync_features._truncate_raw_text(short), short)

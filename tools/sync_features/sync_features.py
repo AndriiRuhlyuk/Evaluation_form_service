@@ -98,6 +98,7 @@ import datetime as dt
 import difflib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -283,6 +284,20 @@ def _truncate_raw_text(text: str) -> str:
     )
 
 
+def _safe_fence(content: str) -> str:
+    """Огорожа, ДОВША за найдовший ряд зворотних лапок усередині `content`.
+
+    Ревʼю раунд 6, minor: сирий текст загортався в рівно три лапки, а дефект,
+    який ця секція діагностує, ЧАСТО і є "модель загорнула JSON в огорожу" -
+    тобто вміст майже напевно містить ```. Три лапки всередині трьох рвуть
+    секцію рівно на найцікавішому випадку, і markdown далі з'їдає решту
+    звіту. Мінімум три (звичайна огорожа), інакше на один більше за
+    найдовший знайдений ряд.
+    """
+    longest = max((len(run) for run in re.findall(r"`+", content)), default=0)
+    return "`" * max(3, longest + 1)
+
+
 def _write_journal(
     out_dir: Path,
     registry_path: Path,
@@ -378,11 +393,14 @@ def _write_journal(
     # Fix I1: секція з'являється ЛИШЕ коли викликач явно передав сирий
     # текст (парсинг чи схема провалились) - на успішному шляху payload
     # уже несе всю інформацію, і повторювати сирий текст нема сенсу.
-    raw_text_section = (
-        f"## Сира відповідь агента\n\n```\n{_truncate_raw_text(raw_agent_text)}\n```\n\n"
-        if raw_agent_text is not None
-        else ""
-    )
+    if raw_agent_text is not None:
+        raw_body = _truncate_raw_text(raw_agent_text)
+        fence = _safe_fence(raw_body)
+        raw_text_section = (
+            f"## Сира відповідь агента\n\n{fence}\n{raw_body}\n{fence}\n\n"
+        )
+    else:
+        raw_text_section = ""
 
     (out_dir / "sync-report.md").write_text(
         f"# Звіт синхронізації реєстру фіч\n\n"
@@ -615,6 +633,17 @@ async def main_sync() -> int:
             raw_agent_text=raw_result,
         )
         return 1
+
+    # Finding L (ревʼю раунд 6): коли в тексті БІЛЬШЕ ОДНОГО схемно валідного
+    # кандидата, вибір "останній" структурно неоднозначний - могла бути
+    # відлунена шаблонна відповідь. Парсер це вирішити не може, тому випадок
+    # мусить бути принаймні ВИДИМИЙ: у stderr зараз і в `## Аномалії процесу`
+    # артефакту потім. Друге страхування - I5, який зловить відлунений
+    # шаблон як розходження звіту з файлом.
+    parse_note = reason if reason != "розібрано" else None
+    if parse_note:
+        print(f"[verify] {parse_note}", file=sys.stderr)
+    error_note = "; ".join(n for n in (error_note, parse_note) if n) or None
 
     schema_problems = verify.validate_schema(payload)
     if schema_problems:

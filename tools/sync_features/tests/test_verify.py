@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from verify import (
@@ -5,6 +6,7 @@ from verify import (
     check_descriptions_intact,
     check_no_id_lost,
     check_parses,
+    check_report_matches_file,
     mentioned_ids,
     parse_agent_json,
     run_all,
@@ -250,7 +252,14 @@ class TestValidateSchema(unittest.TestCase):
         self.assertTrue(validate_schema({"flipped_to_done": []}))
 
     def test_flipped_must_be_strings(self):
-        self.assertTrue(validate_schema({"flipped_to_done": [5], "new_entries": []}))
+        # Ревʼю раунд 6, minor: тест перестав кусати - він проходив через
+        # ВІДСУТНІЙ left_unchanged, тому нерядковий елемент можна було
+        # видалити, і тест лишався зеленим. Тепер payload валідний у всьому
+        # ІНШОМУ, і єдина причина провалу - саме `5`.
+        payload = {"flipped_to_done": [5], "new_entries": [], "left_unchanged": []}
+        problems = validate_schema(payload)
+        self.assertTrue(problems)
+        self.assertTrue(any("flipped_to_done" in p for p in problems))
 
     def test_new_entry_missing_field(self):
         payload = {"flipped_to_done": [], "new_entries": [{"id": "ARCH-28"}]}
@@ -609,6 +618,198 @@ class TestRunAllWithLeftUnchanged(unittest.TestCase):
             ],
         }
         self.assertEqual(run_all(before, after, commits, payload), [])
+
+
+class TestI5ReportMatchesFile(unittest.TestCase):
+    """Finding K (ревʼю раунд 6): жоден інваріант не звіряв ЗВІТ агента з
+    ФАЙЛОМ.
+
+    I2 дивиться лише на множину id, I3 свідомо виключає `done` (його
+    перемикання і є роботою агента), I4 рахує згадки. Тому агент міг
+    перемкнути `done` у файлі і водночас написати "я цього не чіпав" - і
+    пройти геть усе чисто. Це ширше за прийняту межу про вакуумні причини:
+    там причина порожня від змісту, тут САМА ДИСПОЗИЦІЯ хибна.
+    """
+
+    def test_hostile_case_flip_reported_as_untouched(self):
+        before = [entry("ARCH-23", done=False)]
+        after = [entry("ARCH-23", done=True)]
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [],
+            "left_unchanged": [unchanged("ARCH-23")],
+        }
+        ok, reason = check_report_matches_file(before, after, payload)
+        self.assertFalse(ok)
+        self.assertIn("ARCH-23", reason)
+        self.assertIn("left_unchanged", reason)
+
+    def test_silent_flip_not_reported_anywhere(self):
+        before = [entry("ARCH-23", done=False)]
+        after = [entry("ARCH-23", done=True)]
+        payload = {"flipped_to_done": [], "new_entries": [], "left_unchanged": []}
+        ok, reason = check_report_matches_file(before, after, payload)
+        self.assertFalse(ok)
+        self.assertIn("ARCH-23", reason)
+
+    def test_claimed_flip_that_never_happened(self):
+        before = [entry("ARCH-23", done=False)]
+        after = [entry("ARCH-23", done=False)]
+        payload = {
+            "flipped_to_done": ["ARCH-23"],
+            "new_entries": [],
+            "left_unchanged": [],
+        }
+        ok, reason = check_report_matches_file(before, after, payload)
+        self.assertFalse(ok)
+        self.assertIn("ARCH-23", reason)
+
+    def test_flip_in_wrong_direction_caught(self):
+        # done: true -> false і заявлено як "flipped_to_done" - зміна
+        # відбулась і заявлена, але НЕ в той бік, який означає це поле.
+        before = [entry("ARCH-23", done=True)]
+        after = [entry("ARCH-23", done=False)]
+        payload = {
+            "flipped_to_done": ["ARCH-23"],
+            "new_entries": [],
+            "left_unchanged": [],
+        }
+        ok, reason = check_report_matches_file(before, after, payload)
+        self.assertFalse(ok)
+        self.assertIn("ARCH-23", reason)
+
+    def test_honest_flip_is_clean(self):
+        before = [entry("ARCH-23", done=False)]
+        after = [entry("ARCH-23", done=True)]
+        payload = {
+            "flipped_to_done": ["ARCH-23"],
+            "new_entries": [],
+            "left_unchanged": [],
+        }
+        ok, reason = check_report_matches_file(before, after, payload)
+        self.assertTrue(ok, reason)
+
+    def test_appended_entry_not_reported(self):
+        before = [entry("ARCH-23")]
+        after = [entry("ARCH-23"), entry("ARCH-28")]
+        payload = {"flipped_to_done": [], "new_entries": [], "left_unchanged": []}
+        ok, reason = check_report_matches_file(before, after, payload)
+        self.assertFalse(ok)
+        self.assertIn("ARCH-28", reason)
+
+    def test_claimed_new_entry_never_written(self):
+        before = [entry("ARCH-23")]
+        after = [entry("ARCH-23")]
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [{"id": "ARCH-28"}],
+            "left_unchanged": [],
+        }
+        ok, reason = check_report_matches_file(before, after, payload)
+        self.assertFalse(ok)
+        self.assertIn("ARCH-28", reason)
+
+    def test_honest_append_is_clean(self):
+        before = [entry("ARCH-23")]
+        after = [entry("ARCH-23"), entry("ARCH-28", done=True)]
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [{"id": "ARCH-28"}],
+            "left_unchanged": [],
+        }
+        ok, reason = check_report_matches_file(before, after, payload)
+        self.assertTrue(ok, reason)
+
+    def test_measured_honest_run_stays_clean(self):
+        # Виміряний контролером успішний прогін: 25 id у left_unchanged,
+        # жодного flip, features.patch = "(без змін)". Мусить лишитись
+        # чистим, інакше новий інваріант зламав робочий сценарій.
+        ids = [f"ARCH-{n}" for n in range(1, 26)]
+        registry = [entry(i) for i in ids]
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [],
+            "left_unchanged": [unchanged(i) for i in ids],
+        }
+        ok, reason = check_report_matches_file(registry, list(registry), payload)
+        self.assertTrue(ok, reason)
+
+    def test_run_all_includes_i5(self):
+        # I5 мусить бути ВСЕРЕДИНІ run_all, не поруч: інакше його можна
+        # забути на місці виклику, а проєкт це вже проходив (Fix 7).
+        before = [entry("ARCH-23", done=False)]
+        after = [entry("ARCH-23", done=True)]
+        commits = [("a1", "Docs: ARCH-23 - знахідка")]
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [],
+            "left_unchanged": [unchanged("ARCH-23")],
+        }
+        violations = run_all(before, after, commits, payload)
+        self.assertTrue(any("ARCH-23" in v for v in violations))
+
+
+_DECOY = (
+    '{"flipped_to_done": ["ARCH-5"], "new_entries": '
+    '[{"id": "ARCH-28", "category": "arch", "name": "x", '
+    '"description": "y", "done": true}], "left_unchanged": []}'
+)
+_ANSWER = '{"flipped_to_done": [], "new_entries": [], "left_unchanged": []}'
+
+
+class TestParserPrefersSchemaShapedCandidate(unittest.TestCase):
+    """Finding L (ревʼю раунд 6): дві евристики дивились у різні боки -
+    огорожа бралась ОСТАННЯ, збалансований діапазон ПЕРШИЙ.
+
+    Промпт сам постачає повний валідний приклад і просить не ставити
+    огорожу, тому "приклад перед відповіддю без огорожі" - не екзотика.
+    Приманка тут СХЕМНО ВАЛІДНА: validate_schema її пропускає, і прогін
+    тихо звітує про правки, яких не було.
+    """
+
+    def test_unfenced_decoy_before_answer(self):
+        raw = f"Example shape: {_DECOY}\nReal answer: {_ANSWER}"
+        payload, _ = parse_agent_json(raw)
+        self.assertEqual(payload["flipped_to_done"], [])
+
+    def test_unfenced_decoy_after_answer(self):
+        raw = f"My answer: {_ANSWER}\nFor reference the template was: {_DECOY}"
+        payload, _ = parse_agent_json(raw)
+        # Обидва кандидати схемно валідні - беремо ОСТАННІЙ. Тут це
+        # приманка, і жодна структурна ознака її не відрізняє.
+        self.assertIsNotNone(payload)
+
+    def test_fenced_decoy_before_answer(self):
+        raw = f"Template:\n```json\n{_DECOY}\n```\nAnswer:\n```json\n{_ANSWER}\n```"
+        payload, _ = parse_agent_json(raw)
+        self.assertEqual(payload["flipped_to_done"], [])
+
+    def test_ambiguity_is_reported_in_reason(self):
+        # Випадок, який структурно нерозвʼязний, мусить бути хоча б ВИДИМИЙ.
+        raw = f"{_ANSWER}\n{_DECOY}"
+        _, reason = parse_agent_json(raw)
+        self.assertIn("2", reason)
+
+    def test_single_candidate_reason_stays_quiet(self):
+        _, reason = parse_agent_json(_ANSWER)
+        self.assertNotIn("кандидат", reason)
+
+    def test_non_schema_decoy_ignored_entirely(self):
+        raw = f'Example: {{"a": 1}}. Real answer: {_ANSWER}'
+        payload, _ = parse_agent_json(raw)
+        self.assertEqual(payload, json.loads(_ANSWER))
+
+    def test_fallback_when_no_candidate_has_three_keys(self):
+        # Жоден кандидат не має всіх трьох ключів - стара поведінка
+        # (перший збалансований діапазон) лишається як фолбек.
+        raw = 'Example: {"a": 1}. Then: {"b": 2}'
+        payload, _ = parse_agent_json(raw)
+        self.assertEqual(payload, {"a": 1})
+
+    def test_pure_prose_still_none(self):
+        # R5 залежить саме від цього - не послаблювати НІКОЛИ.
+        payload, _ = parse_agent_json("I could not complete the task.")
+        self.assertIsNone(payload)
 
 
 if __name__ == "__main__":
