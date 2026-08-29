@@ -56,6 +56,8 @@ evaluation_form_service/
 ├── templates/reports/         # evaluation_report.html - rendered by generate_html_report()
 ├── fixtures/                  # initial_data.json
 ├── docs/orchestration/        # per-feature plans (Ukrainian)
+├── tools/sync_features/       # an LLM agent reconciles Features_list.json against git history,
+│                              # sandboxed by a PreToolUse hook - never by allowed_tools: README.md
 ├── .githooks/                 # the pre-commit quality gate - what it runs and why: gates.md
 └── .claude/                   # rules/ by layer + the three hooks that know about *this* repo
 ```
