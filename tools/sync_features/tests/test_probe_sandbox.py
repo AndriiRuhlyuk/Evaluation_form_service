@@ -9,6 +9,7 @@
 тому покриваються тут.
 """
 
+import os
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -136,13 +137,16 @@ class TestJournalDenied(unittest.TestCase):
         # ДО виклику hook. Рядкова рівність repr НІКОЛИ не могла збігтись -
         # це і було справжньою причиною FAIL, не обрізання (Fix E було
         # реальним, окремим дефектом).
+        #
+        # Абсолютна половина пари будується від `guard.REPO_ROOT`, а не
+        # фіксується рядком: `_journal_denied` резолвить журнал саме проти
+        # поточного кореня, тому виміряний у worktree абсолютний шлях дає
+        # `denied=False` у будь-якому ІНШОМУ checkout - у ньому той шлях
+        # нормалізується в `.claude/worktrees/.../.env`, який цільовому
+        # `.env` не дорівнює. Форма пари (стрім відносний, журнал
+        # абсолютний) - те, що тут вимірюється; конкретний корінь - ні.
         stream_input = {"file_path": ".env"}
-        journal_input_repr = repr(
-            {
-                "file_path": "/Users/myda2/DRF_project/evaluation_form_service/"
-                ".claude/worktrees/sdk-sync-features/.env"
-            }
-        )
+        journal_input_repr = repr({"file_path": os.path.join(guard.REPO_ROOT, ".env")})
         tool_use = [("Read", stream_input)]
         decisions = [("Read", journal_input_repr, "DENY")]
 
