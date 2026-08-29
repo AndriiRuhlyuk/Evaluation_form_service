@@ -1,3 +1,4 @@
+import os
 import re
 import subprocess
 from datetime import datetime
@@ -53,14 +54,30 @@ def _process_git_result(
     return parse_log(stdout)
 
 
-def commits_since(iso_date: str) -> list[tuple[str, str]]:
-    """Коміти після вказаної дати. Викликає git.
+def commits_since(iso_date: str, cwd: str | os.PathLike) -> list[tuple[str, str]]:
+    """Коміти після вказаної дати в репозиторії `cwd`. Викликає git.
 
     Піднімає ValueError для невалідного формату дати, RuntimeError для git помилок.
+
+    Important 5 (фінальний раунд ревʼю): раніше `git log` запускався БЕЗ
+    `cwd`, тобто в робочій директорії ПРОЦЕСУ, тоді як усе інше в
+    інструменті виводиться з `guard.REPO_ROOT`. Виклик ззовні репозиторію
+    читав історію ІНШОГО репозиторію і віддавав ті теми комітів агентові,
+    який потім правив ЦЕЙ реєстр - неправильний вхід, жодної помилки, і I4
+    задоволений проти не того набору комітів.
+
+    `cwd` - ОБОВʼЯЗКОВИЙ аргумент без умовчання, і це навмисно. Умовчання
+    (чи то `os.getcwd()`, чи то імпорт `guard.REPO_ROOT` сюди) - місце, де
+    хибне значення проходить мовчки, тобто рівно та вада, що фіксується.
+    Обовʼязковий аргумент робить привʼязку видимою в єдиному місці виклику
+    (`sync_features.main_sync` передає `guard.REPO_ROOT`) і лишає `gitscan`
+    вільним від залежності на `guard` - модуль і далі імпортується та
+    тестується сам собою.
     """
     validate_iso_date(iso_date)
     result = subprocess.run(
         ["git", "log", f"--since={iso_date}", "--oneline", "--no-merges"],
+        cwd=cwd,
         capture_output=True,
         text=True,
         encoding="utf-8",

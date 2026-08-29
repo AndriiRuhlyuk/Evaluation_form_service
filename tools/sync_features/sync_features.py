@@ -298,6 +298,33 @@ def _safe_fence(content: str) -> str:
     return "`" * max(3, longest + 1)
 
 
+# Important 4 (фінальний раунд ревʼю): імʼя файлу-знімка. Окреме від
+# `features.patch` навмисно - патч це ПОХІДНЕ (diff), знімок це ДЖЕРЕЛО
+# (сам текст "до"). Коли прогін обривається так, що `_write_journal` не
+# встигає відпрацювати, патча немає взагалі, а знімок уже на диску.
+SNAPSHOT_NAME = "registry-before.json"
+
+
+def _snapshot_registry(out_dir: Path, registry_text: str) -> Path:
+    """Покласти текст реєстру "до" на диск ДО того, як агент почне писати.
+
+    Important 4: `main_sync` стверджувала, що готує теку артефактів до
+    `query()`, але обчислювала лише РЯДОК шляху - `mkdir` і `features.patch`
+    відбувались усередині `_write_journal`, тобто вже ПІСЛЯ агента. Єдина
+    копія тексту "до" жила в памʼяті процесу (`registry_text`), тому
+    `KeyboardInterrupt` чи будь-який виняток поза родиною `ClaudeSDKError`
+    під час прогону на ~100 секунд - після того як перший `Edit` уже ліг у
+    файл - знищував baseline безповоротно. В основному checkout цей baseline
+    містить незакомічений запис ARCH-27, якого `git restore` не поверне; це
+    та сама втрата, проти якої існує ruling про `make clean`, лише крізь
+    інші двері.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_path = out_dir / SNAPSHOT_NAME
+    snapshot_path.write_text(registry_text, encoding="utf-8")
+    return snapshot_path
+
+
 def _write_journal(
     out_dir: Path,
     registry_path: Path,
@@ -518,8 +545,12 @@ async def main_sync() -> int:
     # git сам НЕ скаржиться на биту дату - тихо повертає нуль комітів, і без
     # цієї перевірки pre-check хибно доповів би "нових комітів немає" та
     # вийшов би 0, нічого не зробивши.
+    #
+    # Important 5 (фінальний раунд): `commits_since` тепер вимагає корінь
+    # явним аргументом - це був ОСТАННІЙ підпроцес інструмента, не
+    # привʼязаний до `guard.REPO_ROOT`.
     try:
-        commits = gitscan.commits_since(updated)
+        commits = gitscan.commits_since(updated, repo_root)
     except ValueError as exc:
         print(
             f"[pre-check] поле 'updated'={updated!r} у реєстрі не є валідною "
@@ -573,6 +604,15 @@ async def main_sync() -> int:
     # навіть якщо запуск обірветься на будь-якому наступному кроці (Fix 6).
     timestamp = dt.datetime.now().strftime("%Y-%m-%d-%H%M%S")
     out_dir = repo_root / "tools/sync_features/sync-artifacts" / timestamp
+
+    # Important 4 (фінальний раунд ревʼю): попередня версія цього блоку
+    # обчислювала лише РЯДОК шляху - тека створювалась і патч писався аж у
+    # `_write_journal`, тобто ПІСЛЯ агента, і baseline існував тільки в
+    # `registry_text` у памʼяті. `KeyboardInterrupt` (Ctrl-C на прогоні
+    # ~100 секунд) після першого `Edit` агента знищував його безповоротно.
+    # Тепер `mkdir` + текст "до" лягають на диск ТУТ, перед `query()`.
+    snapshot_path = _snapshot_registry(out_dir, registry_text)
+    print(f"[snapshot] {snapshot_path}", file=sys.stderr)
 
     def persist(
         state: str,
@@ -702,9 +742,13 @@ async def main_sync() -> int:
         )
         return 1
 
-    violations = verify.run_all(
-        registry["features"], after["features"], commits, payload
-    )
+    # Important 1 (фінальний раунд ревʼю): передаємо ПОВНІ документи, не
+    # `["features"]`. Доти верифікатор фізично не бачив `legend`, `project`
+    # і `updated` - агент міг переписати рукописну легенду або підняти
+    # `updated` на сьогодні (після чого КОЖЕН наступний прогін виходив би 0
+    # на pre-check, тобто інструмент вимикав би сам себе), і всі пʼять
+    # інваріантів лишались зеленими. Тепер це I6 всередині `run_all`.
+    violations = verify.run_all(registry, after, commits, payload)
     for violation in violations:
         print(f"[verify] інваріант: {violation}", file=sys.stderr)
 

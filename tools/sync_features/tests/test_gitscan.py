@@ -1,7 +1,12 @@
+import os
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 
 from gitscan import (
     _process_git_result,
+    commits_since,
     coverage_line,
     extract_ids,
     parse_log,
@@ -128,6 +133,63 @@ class TestParseLog(unittest.TestCase):
 
     def test_subject_without_space(self):
         self.assertEqual(parse_log("7a8598f"), [("7a8598f", "")])
+
+
+def _make_repo(path, subject):
+    """Мінімальний git-репозиторій з одним комітом і заданою темою."""
+    path.mkdir(parents=True)
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "probe",
+        "GIT_AUTHOR_EMAIL": "probe@example.com",
+        "GIT_COMMITTER_NAME": "probe",
+        "GIT_COMMITTER_EMAIL": "probe@example.com",
+    }
+    (path / "f.txt").write_text("x", encoding="utf-8")
+    for args in (
+        ["init", "-q"],
+        ["add", "f.txt"],
+        ["commit", "-q", "-m", subject],
+    ):
+        subprocess.run(
+            ["git", *args], cwd=path, env=env, check=True, capture_output=True
+        )
+
+
+class TestCommitsSinceIsAnchored(unittest.TestCase):
+    """Important 5 (фінальний раунд ревʼю): `commits_since` була останнім
+    непривʼязаним підпроцесом у інструменті.
+
+    `git log` запускався БЕЗ `cwd`, тобто в робочій директорії процесу, тоді
+    як усе інше в інструменті виводиться з `guard.REPO_ROOT`. Запуск ззовні
+    репозиторію читав ЧУЖУ історію і віддавав ті теми комітів агентові, який
+    потім правив ЦЕЙ реєстр: неправильний вхід, жодної помилки, і I4
+    задоволений проти не того набору комітів.
+    """
+
+    def test_reads_the_repo_given_by_cwd_not_the_process_cwd(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target"
+            other = Path(tmp) / "other"
+            _make_repo(target, "Fix: ARCH-777 цільовий репозиторій")
+            _make_repo(other, "Fix: CFG-999 сторонній репозиторій")
+
+            previous = os.getcwd()
+            os.chdir(other)
+            try:
+                commits = commits_since("2000-01-01", target)
+            finally:
+                os.chdir(previous)
+
+        subjects = [subject for _, subject in commits]
+        self.assertEqual(subjects, ["Fix: ARCH-777 цільовий репозиторій"])
+
+    def test_cwd_is_required_no_silent_default(self):
+        # Умовчання тут було б місцем, де хибне значення проходить мовчки -
+        # рівно той дефект, який фіксується. Обовʼязковий аргумент робить
+        # привʼязку видимою в єдиному місці виклику.
+        with self.assertRaises(TypeError):
+            commits_since("2000-01-01")
 
 
 class TestCoverageLine(unittest.TestCase):

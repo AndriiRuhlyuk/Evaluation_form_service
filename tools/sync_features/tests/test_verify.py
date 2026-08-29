@@ -4,6 +4,8 @@ import unittest
 from verify import (
     check_coverage,
     check_descriptions_intact,
+    check_entries_identifiable,
+    check_metadata_intact,
     check_no_id_lost,
     check_parses,
     check_report_matches_file,
@@ -22,6 +24,25 @@ def entry(id_, description="опис", done=False, name="назва"):
         "description": description,
         "done": done,
     }
+
+
+_LEGEND = {"done": "реалізовано", "todo": "заплановано"}
+
+
+def doc(features, **meta):
+    """Повний документ реєстру, як він лежить на диску: `features` плюс три
+    метаполя верхнього рівня. `meta` перекриває будь-яке з них.
+
+    `run_all` приймає саме документи (Important 1), тому кожен її виклик у
+    тестах іде через цей хелпер."""
+    document = {
+        "project": "evaluation_form_service",
+        "updated": "2026-08-26",
+        "legend": dict(_LEGEND),
+        "features": features,
+    }
+    document.update(meta)
+    return document
 
 
 class TestI1Parses(unittest.TestCase):
@@ -262,10 +283,24 @@ class TestValidateSchema(unittest.TestCase):
         self.assertTrue(any("flipped_to_done" in p for p in problems))
 
     def test_new_entry_missing_field(self):
-        payload = {"flipped_to_done": [], "new_entries": [{"id": "ARCH-28"}]}
-        self.assertTrue(validate_schema(payload))
+        # Фінальний раунд ревʼю, minor: тест не кусав - він опускав
+        # `left_unchanged`, тому `assertTrue` задовольнявся самою відсутністю
+        # ключа верхнього рівня, і гілку "поля запису" можна було видалити з
+        # `validate_schema`, лишивши тест зеленим. Той самий дефект уже
+        # виправлений рядком вище (`test_flipped_must_be_strings`). Тепер
+        # payload валідний у всьому ІНШОМУ, і перевіряється саме та причина.
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [{"id": "ARCH-28"}],
+            "left_unchanged": [],
+        }
+        problems = validate_schema(payload)
+        self.assertTrue(problems)
+        self.assertTrue(any("без поля" in p for p in problems))
 
     def test_new_entry_done_must_be_bool(self):
+        # Той самий фікс: без `left_unchanged` тест проходив через відсутній
+        # ключ, а не через `"done": "false"`.
         payload = {
             "flipped_to_done": [],
             "new_entries": [
@@ -277,8 +312,11 @@ class TestValidateSchema(unittest.TestCase):
                     "done": "false",
                 }
             ],
+            "left_unchanged": [],
         }
-        self.assertTrue(validate_schema(payload))
+        problems = validate_schema(payload)
+        self.assertTrue(problems)
+        self.assertTrue(any("done" in p for p in problems))
 
     def test_flipped_to_done_must_be_list(self):
         payload = {"flipped_to_done": "ARCH-5", "new_entries": []}
@@ -350,14 +388,14 @@ class TestRunAll(unittest.TestCase):
         after = [entry("ARCH-1", done=True)]
         commits = [("a1", "Fix: ARCH-1")]
         payload = {"flipped_to_done": ["ARCH-1"], "new_entries": []}
-        self.assertEqual(run_all(before, after, commits, payload), [])
+        self.assertEqual(run_all(doc(before), doc(after), commits, payload), [])
 
     def test_violations_accumulate(self):
         before = [entry("ARCH-1", description="оригінал"), entry("ARCH-2")]
         after = [entry("ARCH-1", description="переписано")]
         commits = [("a1", "Fix: CFG-9")]
         payload = {"flipped_to_done": [], "new_entries": []}
-        violations = run_all(before, after, commits, payload)
+        violations = run_all(doc(before), doc(after), commits, payload)
         self.assertEqual(len(violations), 3)
 
 
@@ -617,7 +655,7 @@ class TestRunAllWithLeftUnchanged(unittest.TestCase):
                 unchanged("CFG-2"),
             ],
         }
-        self.assertEqual(run_all(before, after, commits, payload), [])
+        self.assertEqual(run_all(doc(before), doc(after), commits, payload), [])
 
 
 class TestI5ReportMatchesFile(unittest.TestCase):
@@ -745,7 +783,7 @@ class TestI5ReportMatchesFile(unittest.TestCase):
             "new_entries": [],
             "left_unchanged": [unchanged("ARCH-23")],
         }
-        violations = run_all(before, after, commits, payload)
+        violations = run_all(doc(before), doc(after), commits, payload)
         self.assertTrue(any("ARCH-23" in v for v in violations))
 
 
@@ -810,6 +848,157 @@ class TestParserPrefersSchemaShapedCandidate(unittest.TestCase):
         # R5 залежить саме від цього - не послаблювати НІКОЛИ.
         payload, _ = parse_agent_json("I could not complete the task.")
         self.assertIsNone(payload)
+
+
+class TestI6MetadataIntact(unittest.TestCase):
+    """I6 (ревʼю фінального раунду, Important 1): захист реєстру
+    закінчувався на ключі `features`.
+
+    `run_all` отримувала лише `registry["features"]`, а перевірка форми
+    після правки стверджувала тільки "features - список". Живий реєстр несе
+    ще `legend`, `project` і `updated`, і жоден інваріант їх не бачив: агент
+    міг переписати `legend` (рукописна памʼять) або підняти `updated` на
+    сьогодні - і тоді КОЖЕН наступний прогін виходив би 0 на pre-check
+    ("нових комітів немає"), тобто інструмент тихо вимикав би сам себе.
+    """
+
+    def test_legend_rewrite_caught(self):
+        before = doc([entry("ARCH-1")])
+        after = doc([entry("ARCH-1")], legend={"done": "переписано моделлю"})
+        ok, reason = check_metadata_intact(before, after)
+        self.assertFalse(ok)
+        self.assertIn("legend", reason)
+
+    def test_updated_bump_caught_this_is_the_silent_self_disable(self):
+        before = doc([entry("ARCH-1")])
+        after = doc([entry("ARCH-1")], updated="2026-08-29")
+        ok, reason = check_metadata_intact(before, after)
+        self.assertFalse(ok)
+        self.assertIn("updated", reason)
+
+    def test_metadata_key_removed_caught(self):
+        before = doc([entry("ARCH-1")])
+        after = doc([entry("ARCH-1")])
+        del after["project"]
+        ok, reason = check_metadata_intact(before, after)
+        self.assertFalse(ok)
+        self.assertIn("project", reason)
+
+    def test_metadata_key_added_caught(self):
+        before = doc([entry("ARCH-1")])
+        after = doc([entry("ARCH-1")], note="агент вирішив дописати поле")
+        ok, reason = check_metadata_intact(before, after)
+        self.assertFalse(ok)
+        self.assertIn("note", reason)
+
+    def test_untouched_metadata_is_clean(self):
+        before = doc([entry("ARCH-1")])
+        after = doc([entry("ARCH-1", done=True)])
+        ok, _ = check_metadata_intact(before, after)
+        self.assertTrue(ok)
+
+    def test_features_are_not_judged_by_i6(self):
+        # I6 дивиться СУВОРО поза `features` - інакше вона дублювала б I2/I3
+        # і робота агента (перемикання `done`, нові записи) ставала б
+        # порушенням.
+        before = doc([entry("ARCH-1")])
+        after = doc([entry("ARCH-1", done=True), entry("ARCH-28")])
+        ok, _ = check_metadata_intact(before, after)
+        self.assertTrue(ok)
+
+    def test_run_all_sees_metadata_change(self):
+        # Той самий доказ через єдину точку входу: інваріант мусить бути
+        # ВСЕРЕДИНІ run_all, не поруч (те саме рішення, що для I5).
+        before = doc([entry("ARCH-1")])
+        after = doc([entry("ARCH-1")], updated="2026-08-29")
+        payload = {"flipped_to_done": [], "new_entries": [], "left_unchanged": []}
+        violations = run_all(before, after, [], payload)
+        self.assertTrue(any("updated" in v for v in violations))
+
+
+class TestI7EntriesIdentifiable(unittest.TestCase):
+    """I7 (ревʼю фінального раунду, Important 2): `_by_id` ВІДКИДАЄ записи
+    без `id` і СХЛОПУЄ дублікати, а I2, I3 і I5 читають реєстр лише через
+    неї.
+
+    Виміряний ревʼю вхід: файл отримує рядок, JSON каже "нічого не
+    записано", прогін виходить 0. Це третій спосіб інструмента збрехати про
+    те, що він записав, і єдиний, якого не бачив жоден інваріант.
+    """
+
+    def test_reviewer_reproducer_ghost_row_without_id(self):
+        before = [entry("ARCH-1")]
+        ghost = {"category": "ARCH", "name": "ghost", "description": "x", "done": True}
+        payload = {"flipped_to_done": [], "new_entries": [], "left_unchanged": []}
+        violations = run_all(doc(before), doc(before + [ghost]), [], payload)
+        self.assertTrue(violations, "рядок-привид мусить бути порушенням")
+        self.assertTrue(any("id" in v for v in violations))
+
+    def test_appended_duplicate_of_existing_id_caught(self):
+        before = [entry("ARCH-1")]
+        after = before + [entry("ARCH-1")]
+        ok, reason = check_entries_identifiable(after)
+        self.assertFalse(ok)
+        self.assertIn("ARCH-1", reason)
+
+    def test_entry_that_is_not_an_object_caught(self):
+        ok, reason = check_entries_identifiable([entry("ARCH-1"), "ARCH-2"])
+        self.assertFalse(ok)
+        self.assertIn("1", reason)
+
+    def test_non_string_id_caught(self):
+        broken = dict(entry("ARCH-1"))
+        broken["id"] = 7
+        ok, _ = check_entries_identifiable([broken])
+        self.assertFalse(ok)
+
+    def test_empty_id_caught(self):
+        broken = dict(entry("ARCH-1"))
+        broken["id"] = "   "
+        ok, _ = check_entries_identifiable([broken])
+        self.assertFalse(ok)
+
+    def test_healthy_registry_is_clean(self):
+        entries = [entry(f"ARCH-{n}") for n in range(1, 30)]
+        ok, _ = check_entries_identifiable(entries)
+        self.assertTrue(ok)
+
+    def test_i7_does_not_fire_on_legitimate_append(self):
+        # Нормальна робота агента - додати запис з НОВИМ id - лишається
+        # чистою; ловиться лише невидимий для `_by_id` рядок.
+        before = [entry("ARCH-1")]
+        after = before + [entry("ARCH-28", done=True)]
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [entry("ARCH-28", done=True)],
+            "left_unchanged": [],
+        }
+        self.assertEqual(run_all(doc(before), doc(after), [], payload), [])
+
+
+class TestRunAllTakesWholeDocuments(unittest.TestCase):
+    """`run_all` тепер приймає ПОВНІ документи, не лише списки `features`.
+
+    Це і є структурний фікс Important 1: місце виклику фізично не може
+    передати верифікатору менше, ніж увесь файл, тому "захист закінчується
+    на `features`" більше не можна відтворити забувши аргумент.
+    """
+
+    def test_measured_honest_run_stays_clean_end_to_end(self):
+        # Виміряний контролером чесний прогін: 24 id у left_unchanged,
+        # жодного flip, features.patch = "(без змін)". Мусить лишитись
+        # ЧИСТИМ і після двох нових інваріантів.
+        ids = [f"ARCH-{n}" for n in range(1, 25)]
+        features = [entry(i) for i in ids]
+        commits = [("a1", f"Docs: {i} - знахідка") for i in ids]
+        payload = {
+            "flipped_to_done": [],
+            "new_entries": [],
+            "left_unchanged": [unchanged(i) for i in ids],
+        }
+        self.assertEqual(
+            run_all(doc(features), doc(list(features)), commits, payload), []
+        )
 
 
 if __name__ == "__main__":

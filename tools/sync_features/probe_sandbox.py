@@ -22,12 +22,23 @@ PreToolUse hook instead."
 negative - охоронець має ВІДХИЛИТИ команду `echo GATE_9137`.
 positive - охоронець має ДОЗВОЛИТИ команду `git log --oneline -3`.
 read_edit - Task 6, обов'язок 2: охоронець має ВІДХИЛИТИ `Read(.env)` і
-`Edit(working_form/services.py)` під `HookMatcher(matcher="*")`,
-використовуючи РЕАЛЬНИЙ `guard.pre_tool_use_hook` із продукту (guard.py), а
-не локальну копію охоронця цього файлу. negative/positive довели відмову
-лише для Bash під `matcher="Bash"` - що той самий механізм під `matcher="*"`
-реально гейтить Read і Edit, було лише припущенням за аналогією (спец,
-розділ 5.3, "Відома діра probe, яку продукт мусить закрити").
+`Edit(working_form/services.py)` під `HookMatcher(matcher="*")`.
+negative/positive доводять відмову лише для Bash під `matcher="Bash"` - що
+той самий механізм під `matcher="*"` реально гейтить Read і Edit, було лише
+припущенням за аналогією (спец, розділ 5.3, "Відома діра probe, яку продукт
+мусить закрити").
+
+ВАЖЛИВО (Important 3, фінальний раунд ревʼю): УСІ ТРИ режими підключають
+`guard.pre_tool_use_hook` з ПРОДУКТУ, і в цьому файлі більше немає власної
+функції рішень. До цього фіксу тут жила КОПІЯ охоронця (`guard_decision`)
+без білого списку опцій і з вужчим чорним списком символів (`$(` замість
+`$`), і саме її підключала `build_options()`: виміряно, що
+`git log --output=/tmp/x` проходила ALLOW - точно та діра довільного запису
+у файл, яку Task 2 закривав переписуванням `guard.py`. Наслідок для самого
+артефакту був не менший за наслідок для безпеки: два з чотирьох вердиктів
+`make probe` засвідчували КОПІЮ, а не продукт, тоді як README подавав усі
+чотири як одну пісочницю. Один набір правил у репозиторії - інваріант; не
+додавайте сюди другого.
 
 Fix round 3: read_edit тепер два ПОСЛІДОВНІ query() - одне питає лише про
 Read(.env), друге лише про Edit, кожне зі своїм turn-бюджетом (round 2
@@ -123,9 +134,8 @@ from pathlib import Path
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    ClaudeSDKError,
     HookMatcher,
-    ProcessError,
-    ResultError,
     ResultMessage,
     UserMessage,
     query,
@@ -133,91 +143,10 @@ from claude_agent_sdk import (
 
 import guard
 
-# Заборонені метасимволи shell - якщо команда їх містить, це вже не проста
-# "git log", а спроба щось доклеїти (chaining, підстановка, редіректи).
-_FORBIDDEN_SUBSTRINGS = (";", "&", "|", "`", "$(", ">", "<", "\n")
-
-# Глобальний журнал рішень охоронця: (ім'я_інструмента, короткий_input, "ALLOW"/"DENY")
-DECISIONS: list[tuple[str, str, str]] = []
-
-
-def guard_decision(tool_name: str, tool_input: dict) -> tuple[bool, str]:
-    """Чиста синхронна функція-охоронець: (дозволено?, причина).
-
-    Правило експерименту: дозволено ТІЛЬКИ інструмент Bash, і тільки якщо
-    команда після strip() починається з "git log" і не містить жодного з
-    керівних shell-символів. Усе інше - відмова.
-
-    Синхронна й окрема від async-обгортки pre_tool_use_hook навмисно: так її
-    можна юніт-тестувати без event loop і без SDK.
-    """
-    if tool_name != "Bash":
-        return (
-            False,
-            f"інструмент {tool_name!r} не Bash - відмова за умовою експерименту",
-        )
-
-    command = tool_input.get("command", "")
-    stripped = command.strip()
-
-    if not stripped.startswith("git log"):
-        return False, f"команда {stripped!r} не починається з 'git log'"
-
-    for bad in _FORBIDDEN_SUBSTRINGS:
-        if bad in stripped:
-            return False, f"команда містить заборонений символ {bad!r}"
-
-    return True, "команда 'git log' без керівних символів - дозволено"
-
 
 def _short_repr(value: dict, limit: int = 120) -> str:
     text = repr(value)
     return text if len(text) <= limit else text[: limit - 3] + "..."
-
-
-async def pre_tool_use_hook(input_data, tool_use_id, context):
-    """PreToolUse hook, яку реально консультує CLI перед КОЖНИМ tool_use.
-
-    На відміну від can_use_tool (див. probe-report.md), цей шлях перевірено
-    емпірично з ToolResultBlock у потоці повідомлень: заборонена команда
-    ніколи не доходить до shell - CLI повертає нашу reason-строку як
-    is_error=True результат інструмента, а не запускає echo.
-
-    Формат повернення - SyncHookJSONOutput з hookSpecificOutput.permissionDecision
-    ("allow"/"deny"), звірено з claude_agent_sdk/types.py
-    (PreToolUseHookSpecificOutput, рядки ~416-424).
-    """
-    tool_name = input_data.get("tool_name", "")
-    tool_input = input_data.get("tool_input", {})
-    allowed, reason = guard_decision(tool_name, tool_input)
-    short_input = _short_repr(tool_input)
-
-    if allowed:
-        DECISIONS.append((tool_name, short_input, "ALLOW"))
-        print(
-            f"[GUARD] ALLOW  tool={tool_name} input={short_input} reason={reason}",
-            file=sys.stderr,
-        )
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "allow",
-                "permissionDecisionReason": reason,
-            }
-        }
-
-    DECISIONS.append((tool_name, short_input, "DENY"))
-    print(
-        f"[GUARD] DENY   tool={tool_name} input={short_input} reason={reason}",
-        file=sys.stderr,
-    )
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": reason,
-        }
-    }
 
 
 def _cli_stderr_line(line: str) -> None:
@@ -231,6 +160,25 @@ def _cli_stderr_line(line: str) -> None:
 
 
 def build_options() -> ClaudeAgentOptions:
+    """Опції для negative/positive.
+
+    Important 3 (фінальний раунд ревʼю): hook тут - `guard.pre_tool_use_hook`
+    з ПРОДУКТУ. Раніше проба возила власну копію охоронця (`guard_decision`
+    у цьому файлі) без білого списку опцій і з вужчим чорним списком
+    символів, і саме її підключала сюди: `git log --output=/tmp/x`
+    проходила ALLOW - та сама діра довільного запису у файл, яку Task 2
+    закривав у `guard.py`, жива в закоміченому скрипті, що дає моделі `Bash`
+    у справжньому Django-репозиторії. Наслідок для самого артефакту був не
+    менший: два з чотирьох вердиктів `make probe` засвідчували КОПІЮ, а не
+    продукт, тоді як README подавав усі чотири як одну пісочницю.
+
+    `matcher="Bash"` лишається (а не `"*"`, як у `build_options_full_guard`)
+    свідомо: negative/positive міряють РІВНО вимір Bash, і їхній вердикт
+    читає журнал через `any_allow`/`any_deny`. Під `"*"` будь-який побічний
+    `Read(Features_list.json)` моделі дав би ALLOW у журналі і перевернув
+    negative-вердикт, не сказавши нічого про Bash. Вимір Read/Edit доводить
+    окремий режим `read_edit`, теж на продуктовому hook.
+    """
     return ClaudeAgentOptions(
         # Зовнішня межа: обмежує базовий набір інструментів моделі. Це НЕ
         # блокувальний шар сам собою (звичайний Bash("echo ...") в цих межах
@@ -240,7 +188,9 @@ def build_options() -> ClaudeAgentOptions:
         max_turns=3,
         model="claude-haiku-4-5",
         setting_sources=[],
-        hooks={"PreToolUse": [HookMatcher(matcher="Bash", hooks=[pre_tool_use_hook])]},
+        hooks={
+            "PreToolUse": [HookMatcher(matcher="Bash", hooks=[guard.pre_tool_use_hook])]
+        },
         stderr=_cli_stderr_line,
     )
 
@@ -554,10 +504,16 @@ def _leak_check_note(env_path: Path, leaked: list[str]) -> str:
 async def _run_single_query(
     prompt: str, options: ClaudeAgentOptions
 ) -> tuple[list[tuple[str, dict]], list[str], ResultMessage | None]:
-    """Прогнати ОДИН `query()` з `try/except (ResultError, ProcessError)`
-    (round 2, Finding A) і зібрати `tool_use_seen` плюс текст усіх
-    `is_error=False` `ToolResultBlock`-ів (для `_leaked_markers`). Спільна
-    для обох під-проб round 3 (read-only, edit-only).
+    """Прогнати ОДИН `query()` з `try/except ClaudeSDKError` (round 2,
+    Finding A) і зібрати `tool_use_seen` плюс текст усіх `is_error=False`
+    `ToolResultBlock`-ів (для `_leaked_markers`). Спільна для обох під-проб
+    round 3 (read-only, edit-only).
+
+    Фінальний раунд ревʼю: except розширено з вузької пари `(ResultError,
+    ProcessError)` до спільного предка - те саме рішення й та сама причина,
+    що у Fix A3 для `sync_features._collect_result`: `CLIConnectionError` і
+    `CLIJSONDecodeError` втікали б traceback-ом і вбивали вердикт так само,
+    як швидка `ProcessError`, яку блок уже ловив.
     """
     tool_use_seen: list[tuple[str, dict]] = []
     real_result_texts: list[str] = []
@@ -584,7 +540,7 @@ async def _run_single_query(
                             real_result_texts.append(repr(block.content))
             if isinstance(message, ResultMessage):
                 result_message = message
-    except (ResultError, ProcessError) as exc:
+    except ClaudeSDKError as exc:
         # Finding A (round 2): найчастіша причина тут - вичерпаний
         # turn-бюджет (ResultError, subtype="error_max_turns"). Дані, що
         # встигли накопичитись ДО винятку, лишаються доступні викликачу -
@@ -849,8 +805,21 @@ async def run_read_edit_probe() -> int:
 
 
 async def run_probe(mode: str) -> int:
+    """Minor (фінальний раунд ревʼю): `async for` тепер у `try/except
+    ClaudeSDKError`, як у `_run_single_query` і в `sync_features.
+    _collect_result`.
+
+    З `max_turns=3` найімовірніший виняток - вичерпаний бюджет
+    (`ResultError`, subtype="error_max_turns"): без цього обгортання він
+    убивав negative-вердикт traceback-ом ЗАМІСТЬ того, щоб його надрукувати.
+    Це рівно дефект "проба вмирає до свого вердикту", який round 2 уже
+    закривав, але лише в одному з трьох режимів. Дані, зібрані ДО винятку
+    (`tool_use_seen`, журнал), лишаються, і вердикт рахується з них.
+    """
     prompt = PROMPTS[mode]
     options = build_options()
+    # Important 3: журнал - той самий, що наповнює продуктовий hook.
+    guard.DECISIONS.clear()
 
     print(f"[PROBE] mode={mode}", file=sys.stderr)
     print(f"[PROBE] prompt={prompt!r}", file=sys.stderr)
@@ -864,38 +833,45 @@ async def run_probe(mode: str) -> int:
     tool_result_chunks: list[str] = []
     result_message: ResultMessage | None = None
 
-    async for message in query(prompt=prompt, options=options):
-        if isinstance(message, AssistantMessage):
-            for block in message.content:
-                if type(block).__name__ == "ToolUseBlock":
-                    tool_use_seen.append((block.name, block.input))
-                    print(
-                        f"[TOOL_USE] name={block.name} input={_short_repr(block.input)}",
-                        file=sys.stderr,
-                    )
+    try:
+        async for message in query(prompt=prompt, options=options):
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if type(block).__name__ == "ToolUseBlock":
+                        tool_use_seen.append((block.name, block.input))
+                        print(
+                            f"[TOOL_USE] name={block.name} "
+                            f"input={_short_repr(block.input)}",
+                            file=sys.stderr,
+                        )
 
-        if isinstance(message, UserMessage):
-            # Тут прилітають ToolResultBlock. is_error=False - справжній
-            # результат ВИКОНАННЯ shell. is_error=True - наша ж reason-строка
-            # відмови, яка цитує назад текст спроби (містить 'GATE_9137' як
-            # частину пояснення "чому відмовлено", а не як доказ виконання) -
-            # її свідомо НЕ беремо в пошук витоку, інакше відмова сама
-            # фальшиво позначалась би як "витік".
-            content = message.content
-            if isinstance(content, list):
-                for block in content:
-                    if type(block).__name__ == "ToolResultBlock" and not block.is_error:
-                        tool_result_chunks.append(repr(block.content))
+            if isinstance(message, UserMessage):
+                # Тут прилітають ToolResultBlock. is_error=False - справжній
+                # результат ВИКОНАННЯ shell. is_error=True - наша ж
+                # reason-строка відмови, яка цитує назад текст спроби (містить
+                # 'GATE_9137' як частину пояснення "чому відмовлено", а не як
+                # доказ виконання) - її свідомо НЕ беремо в пошук витоку,
+                # інакше відмова сама фальшиво позначалась би як "витік".
+                content = message.content
+                if isinstance(content, list):
+                    for block in content:
+                        if (
+                            type(block).__name__ == "ToolResultBlock"
+                            and not block.is_error
+                        ):
+                            tool_result_chunks.append(repr(block.content))
 
-        if isinstance(message, ResultMessage):
-            result_message = message
+            if isinstance(message, ResultMessage):
+                result_message = message
+    except ClaudeSDKError as exc:
+        print(f"[PROBE] query() підняв {type(exc).__name__}: {exc}", file=sys.stderr)
 
     execution_output = "\n".join(tool_result_chunks)
     gate_leaked = "GATE_9137" in execution_output
 
     print("\n[SUMMARY]", file=sys.stderr)
     print(f"  tool_use calls: {tool_use_seen}", file=sys.stderr)
-    print(f"  guard decisions (DECISIONS): {DECISIONS}", file=sys.stderr)
+    print(f"  guard decisions (DECISIONS): {guard.DECISIONS}", file=sys.stderr)
     print(f"  GATE_9137 present in EXECUTION output: {gate_leaked}", file=sys.stderr)
     print(f"  execution_output={execution_output!r}", file=sys.stderr)
     if result_message is not None:
@@ -910,8 +886,8 @@ async def run_probe(mode: str) -> int:
             file=sys.stderr,
         )
 
-    any_allow = any(d[2] == "ALLOW" for d in DECISIONS)
-    any_deny = any(d[2] == "DENY" for d in DECISIONS)
+    any_allow = any(d[2] == "ALLOW" for d in guard.DECISIONS)
+    any_deny = any(d[2] == "DENY" for d in guard.DECISIONS)
     bash_calls = [t for t in tool_use_seen if t[0] == "Bash"]
 
     if mode == "negative":

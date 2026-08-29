@@ -187,19 +187,139 @@ def check_report_matches_file(
     return True, "звіт агента збігається з файлом"
 
 
+_METADATA_VALUE_TRUNCATE = 80
+
+
+def _short_value(value: object) -> str:
+    """repr значення метаполя, обрізаний для рядка звіту.
+
+    `legend` - словник на кілька рядків; неврізаний repr у причині
+    порушення робить і stderr, і `sync-report.md` нечитабельними, а вся
+    інформація, потрібна людині тут, - ЯКИЙ ключ змінився.
+    """
+    text = repr(value)
+    if len(text) <= _METADATA_VALUE_TRUNCATE:
+        return text
+    return text[: _METADATA_VALUE_TRUNCATE - 3] + "..."
+
+
+def check_metadata_intact(before_doc: dict, after_doc: dict) -> tuple[bool, str]:
+    """I6: усе на верхньому рівні реєстру ПОЗА `features` - незмінне.
+
+    Ревʼю фінального раунду (Important 1): захист реєстру закінчувався на
+    ключі `features`. `run_all` отримувала лише `registry["features"]`, а
+    перевірка форми після правки (`sync_features.py`) стверджувала лише
+    "features - це список". Живий файл несе ще `project`, `updated` і
+    `legend`, і жоден інваріант їх не бачив - обидва наслідки проходили з
+    усіма пʼятьма зеленими:
+
+    - агент переписує `legend` - рукописна памʼять знищена мовчки;
+    - агент піднімає `updated` на сьогодні - і КОЖЕН наступний прогін
+      виходить 0 ще на pre-check ("нових комітів немає"). Інструмент тихо
+      вимикає сам себе, і жодна помилка про це не скаже.
+
+    Перевіряються ТРИ роди змін - зниклий ключ, доданий ключ і змінене
+    значення. Порівняння за `!=` на розпарсеному JSON, не за текстом:
+    переформатування самого файлу (відступи, порядок ключів) роботою агента
+    не є і тут навмисно не судиться - його ловить `features.patch`, який
+    людина й так переглядає.
+
+    `features` виключено СУВОРО: інакше I6 дублювала б I2/I3 і сама робота
+    агента (перемикання `done`, нові записи) ставала б порушенням.
+    """
+    before_meta = {key: value for key, value in before_doc.items() if key != "features"}
+    after_meta = {key: value for key, value in after_doc.items() if key != "features"}
+
+    problems: list[str] = []
+    for key in sorted(set(before_meta) - set(after_meta)):
+        problems.append(f"{key}: ключ зник")
+    for key in sorted(set(after_meta) - set(before_meta)):
+        problems.append(f"{key}: ключ доданий ({_short_value(after_meta[key])})")
+    for key in sorted(set(before_meta) & set(after_meta)):
+        if before_meta[key] != after_meta[key]:
+            problems.append(
+                f"{key}: {_short_value(before_meta[key])} -> "
+                f"{_short_value(after_meta[key])}"
+            )
+
+    if problems:
+        return False, "змінено метадані реєстру поза 'features': " + "; ".join(problems)
+    return True, "метадані реєстру поза 'features' не змінені"
+
+
+def check_entries_identifiable(after: list) -> tuple[bool, str]:
+    """I7: КОЖЕН запис у файлі після правки має унікальний непорожній `id`.
+
+    Ревʼю фінального раунду (Important 2): `_by_id` ВІДКИДАЄ записи без
+    `id` і СХЛОПУЄ дублікати, а I2, I3 і I5 читають реєстр лише через неї.
+    Виміряний ревʼю вхід - `run_all(before, before + [{"name": "ghost",
+    ...}], [], {порожні списки})` - повертав `[]`: файл отримав рядок, JSON
+    сказав "нічого не записано", прогін вийшов 0. Те саме для дописаного
+    байт-у-байт дубліката наявного id.
+
+    Чому саме ця вимога, а не "рядків стало `len(before) +
+    len(new_entries)`": лічильник рядків звіряє файл із ЗАЯВОЮ агента, тому
+    брехлива заява і спричиняє порушення, і маскує його (два `new_entries`
+    з однаковим id дають 2 у довжині списку і 1 в множині id). Унікальність
+    вимірюється СУВОРО з файлу і від звіту не залежить. Крім того вона
+    сильніша: щойно кожен рядок `after` має унікальний id, `_by_id` стає
+    без-втратною, і будь-який дописаний рядок знову ВИДИМИЙ для I5 -
+    "дописав і не звітував" ловить I5, як і задумано, а не тиша.
+
+    Судиться лише `after`. `before` - людський baseline, і перевіряти його
+    тут означало б звинувачувати агента в чужій ваді; виміряний реєстр цієї
+    гілки чистий (79 записів, 0 без id, 0 дублікатів), тому на здоровому
+    прогоні I7 мовчить.
+    """
+    problems: list[str] = []
+    first_seen: dict[str, int] = {}
+    for index, item in enumerate(after):
+        if not isinstance(item, dict):
+            problems.append(f"запис #{index} не є обʼєктом ({_short_value(item)})")
+            continue
+        id_ = item.get("id")
+        if not isinstance(id_, str) or not id_.strip():
+            problems.append(
+                f"запис #{index} без непорожнього рядкового 'id' "
+                f"({_short_value(item.get('name'))})"
+            )
+            continue
+        if id_ in first_seen:
+            problems.append(
+                f"{id_}: дублікат id у записах #{first_seen[id_]} і #{index}"
+            )
+        else:
+            first_seen[id_] = index
+
+    if problems:
+        return False, (
+            "записи реєстру не ідентифікуються однозначно: " + "; ".join(problems)
+        )
+    return True, f"усі {len(after)} записів мають унікальний id"
+
+
 def run_all(
-    before: list[dict],
-    after: list[dict],
+    before_doc: dict,
+    after_doc: dict,
     commits: list[tuple[str, str]],
     payload: dict,
 ) -> list[str]:
     """Прогнати всі інваріанти. Порожній список = порядок.
 
-    I5 (Finding K) стоїть ТУТ, а не поруч у `sync_features.py`, свідомо:
-    `run_all` - єдина точка входу "усе, що знає верифікатор", і перевірку в
-    ній неможливо забути на місці виклику. Проєкт це вже проходив (Fix 7,
-    два незалежні підрахунки одного union'у в різних файлах). Уся потрібна
-    дані вже є в сигнатурі - `before`, `after`, `payload`.
+    Приймає ПОВНІ документи реєстру, не лише списки `features` - це і є
+    структурний бік фіксу Important 1: місце виклику фізично не може
+    передати верифікатору менше, ніж увесь файл, тому "захист закінчується
+    на `features`" не можна відтворити, забувши аргумент. Форму обох
+    документів (`dict` із `features`-списком) перевіряє викликач ДО і ПІСЛЯ
+    правки агента, тому індексуємо `["features"]` прямо: відсутній ключ тут
+    - зламаний контракт викликача, і хай він падає гучно, а не звіряє два
+    порожні списки мовчки.
+
+    I5 (Finding K), I6 і I7 стоять ТУТ, а не поруч у `sync_features.py`,
+    свідомо: `run_all` - єдина точка входу "усе, що знає верифікатор", і
+    перевірку в ній неможливо забути на місці виклику. Проєкт це вже
+    проходив (Fix 7, два незалежні підрахунки одного union'у в різних
+    файлах). Уся потрібні дані вже є в сигнатурі.
 
     Порушення I5 дає код виходу 2 ("відпрацював із зауваженнями"), не 1
     ("зламалось"), з двох причин. По-перше, за змістом це той самий рід
@@ -211,13 +331,27 @@ def run_all(
     тоді, коли вони найпотрібніші. Правки у файлі при цьому цілком можуть
     бути правильними - хибний тут ЗВІТ, і вирішує це ручний перегляд
     `features.patch`, який і так обовʼязковий.
+
+    I6 та I7 отримують той самий код 2, і з тих самих причин. Спокуса дати
+    I6 код 1 є ("піднятий `updated` вимикає інструмент назавжди"), але
+    наслідок від коду виходу не залежить: файл на диску вже змінено в обох
+    випадках, лікує це та сама ручна правка, а код 1 РОБИТЬ ГІРШЕ - він
+    змусив би `main_sync` повернутись раніше і забрав би в людини результати
+    решти інваріантів того самого прогону саме тоді, коли треба зрозуміти,
+    що ще агент устиг зачепити. Код 1 у цьому інструменті означає "не
+    відпрацював" (SDK впав, JSON не розібрався, файл не парситься), а не
+    "відпрацював погано".
     """
+    before = before_doc["features"]
+    after = after_doc["features"]
     violations: list[str] = []
     for ok, reason in (
         check_no_id_lost(before, after),
         check_descriptions_intact(before, after),
         check_coverage(commits, payload),
         check_report_matches_file(before, after, payload),
+        check_metadata_intact(before_doc, after_doc),
+        check_entries_identifiable(after),
     ):
         if not ok:
             violations.append(reason)

@@ -11,6 +11,9 @@
 
 import unittest
 from pathlib import Path
+from unittest import mock
+
+from claude_agent_sdk import CLIJSONDecodeError, ResultError
 
 import guard
 import probe_sandbox
@@ -305,3 +308,106 @@ class TestVerdictForOp(unittest.TestCase):
         self.assertEqual(
             probe_sandbox._verdict_for_op(True, False, True, True, []), "FAIL"
         )
+
+
+def _probe_hook():
+    """Хук, який `build_options()` реально підключає до `PreToolUse`."""
+    matchers = probe_sandbox.build_options().hooks["PreToolUse"]
+    return matchers[0].hooks[0]
+
+
+class TestProbeUsesTheProductGuard(unittest.IsolatedAsyncioTestCase):
+    """Important 3 (фінальний раунд ревʼю): проба возила ДРУГУ, слабшу копію
+    охоронця.
+
+    `probe_sandbox.guard_decision` була копією без білого списку опцій і з
+    вужчим чорним списком символів (`$(` замість `$`), а `build_options()`
+    підключала саме її. Виміряний ревʼю вхід:
+
+        probe_sandbox.guard_decision("Bash", {"command": "git log --output=/tmp/x"})
+        -> (True, ...)
+
+    Це рівно та діра довільного запису у файл, яку Task 2 закривав
+    переписуванням `guard.py`, - жива, у закоміченому скрипті, що дає LLM
+    інструмент `Bash` усередині справжнього Django-репозиторію. Гірше для
+    самого артефакту: два з чотирьох вердиктів `make probe` засвідчували
+    КОПІЮ, а не продукт, тоді як README подавав усі чотири як одну
+    пісочницю.
+    """
+
+    def test_probe_module_has_no_second_rule_set(self):
+        self.assertFalse(
+            hasattr(probe_sandbox, "guard_decision"),
+            "у репозиторії мусить лишитись рівно один набір правил",
+        )
+
+    def test_build_options_wires_the_product_hook(self):
+        self.assertIs(_probe_hook(), guard.pre_tool_use_hook)
+
+    async def test_reviewer_reproducer_output_option_now_denied(self):
+        result = await _probe_hook()(
+            {"tool_name": "Bash", "tool_input": {"command": "git log --output=/tmp/x"}},
+            "tool-use-probe-1",
+            {},
+        )
+        self.assertEqual(result["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    async def test_negative_mode_command_still_denied(self):
+        # Обмеження контролера: рішення guard'а не рухаються. Команда
+        # negative-проби мусить лишитись DENY.
+        result = await _probe_hook()(
+            {"tool_name": "Bash", "tool_input": {"command": "echo GATE_9137"}},
+            "tool-use-probe-2",
+            {},
+        )
+        self.assertEqual(result["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    async def test_positive_mode_command_still_allowed(self):
+        # І команда positive-проби мусить лишитись ALLOW - інакше фікс
+        # Important 3 зламав би два з чотирьох вердиктів `make probe`.
+        result = await _probe_hook()(
+            {"tool_name": "Bash", "tool_input": {"command": "git log --oneline -3"}},
+            "tool-use-probe-3",
+            {},
+        )
+        self.assertEqual(result["hookSpecificOutput"]["permissionDecision"], "allow")
+
+
+class TestRunProbeSurvivesSdkError(unittest.IsolatedAsyncioTestCase):
+    """Minor (фінальний раунд ревʼю): `run_probe` не мала `ClaudeSDKError`-
+    захисту, хоча `_run_single_query` мала.
+
+    З `max_turns=3` вичерпаний бюджет убивав negative-вердикт traceback-ом
+    замість того, щоб його надрукувати - той самий дефект "проба вмирає до
+    свого вердикту", який round 2 уже закривав, але лише в одному з трьох
+    режимів.
+    """
+
+    def setUp(self):
+        guard.DECISIONS.clear()
+        self.addCleanup(guard.DECISIONS.clear)
+
+    async def test_negative_mode_prints_verdict_instead_of_traceback(self):
+        async def exploding_query(prompt, options):
+            raise ResultError(
+                "Reached maximum number of turns (3)",
+                data={"subtype": "error_max_turns"},
+            )
+            yield  # недосяжно: лише щоб функція лишалась async-генератором
+
+        with mock.patch.object(probe_sandbox, "query", exploding_query):
+            code = await probe_sandbox.run_probe("negative")
+
+        # Жодної цільової відмови не сталось, тому вердикт негативний - але
+        # він Є, і це саме та різниця, яку фікс приносить.
+        self.assertEqual(code, 1)
+
+    async def test_positive_mode_prints_verdict_instead_of_traceback(self):
+        async def exploding_query(prompt, options):
+            raise CLIJSONDecodeError("not json", ValueError("bad token"))
+            yield  # недосяжно: лише щоб функція лишалась async-генератором
+
+        with mock.patch.object(probe_sandbox, "query", exploding_query):
+            code = await probe_sandbox.run_probe("positive")
+
+        self.assertEqual(code, 1)

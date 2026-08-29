@@ -347,6 +347,41 @@ class TestPreToolUseHook(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(shown, full_repr)
         self.assertIn("services.py", shown)
 
+    async def test_broken_journal_append_becomes_deny_not_an_escaped_exception(self):
+        # Minor (фінальний раунд ревʼю): `DECISIONS.append` стояв ПОЗА
+        # `try/except`, чий інваріант у докстрінгу - "будь-який збій на
+        # будь-якому кроці перетворюється на deny". Виняток тут вибивав би з
+        # hook, і SDK лишалось БЕЗ рішення - рівно та вада, яку попередній
+        # раунд фіксів уже прибирав з логування.
+        class BrokenJournal(list):
+            def append(self, _item):
+                raise MemoryError("журнал зламано")
+
+        with mock.patch.object(guard, "DECISIONS", BrokenJournal()):
+            result = await guard.pre_tool_use_hook(
+                {"tool_name": "Bash", "tool_input": {"command": "git log -1"}},
+                "tool-use-8",
+                {},
+            )
+        output = result["hookSpecificOutput"]
+        self.assertEqual(output["permissionDecision"], "deny")
+
+    async def test_exploding_repr_of_tool_input_becomes_deny(self):
+        # Той самий крок може впасти й з іншого боку: сам `repr(tool_input)`
+        # рахується всередині рядка журналу.
+        class ExplodingRepr(dict):
+            def __repr__(self):
+                raise ValueError("repr зламано")
+
+        tool_input = ExplodingRepr(command="git log -1")
+        result = await guard.pre_tool_use_hook(
+            {"tool_name": "Bash", "tool_input": tool_input},
+            "tool-use-9",
+            {},
+        )
+        output = result["hookSpecificOutput"]
+        self.assertEqual(output["permissionDecision"], "deny")
+
 
 class TestSelfCheck(unittest.TestCase):
     def test_self_check_passes_silently(self):

@@ -20,6 +20,7 @@ Fix A3 (Task 7): `error_note` тепер заповнюється БЕЗУМОВ
 (`errors="replace"` на биті байти) отримують покриття тут вперше.
 """
 
+import inspect
 import tempfile
 import unittest
 from pathlib import Path
@@ -343,6 +344,51 @@ class TestWriteJournal(unittest.TestCase):
         self.assertIn("обрізано", result)
         self.assertIn(str(len(long_text)), result)
         self.assertLess(len(result), len(long_text))
+
+
+class TestSnapshotRegistry(unittest.TestCase):
+    """Important 4 (фінальний раунд ревʼю): baseline реєстру існував ЛИШЕ в
+    памʼяті процесу.
+
+    Коментар у `main_sync` стверджував, що тека артефактів готується ДО
+    `query()`, але обчислювався тільки РЯДОК шляху - `mkdir` і
+    `features.patch` відбувались усередині `_write_journal`, тобто ПІСЛЯ
+    того, як агент відпрацював. `KeyboardInterrupt` або будь-який виняток
+    не з родини `ClaudeSDKError` під час ~100-секундного прогону, після
+    того як перший `Edit` уже ліг у файл, знищував єдину копію тексту "до".
+    В основному checkout цей baseline містить незакомічений запис ARCH-27,
+    якого `git restore` не поверне.
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.out_dir = Path(self._tmpdir.name) / "artifacts" / "2026-08-29-010203"
+
+    def test_creates_directory_and_file(self):
+        path = sync_features._snapshot_registry(self.out_dir, '{"features": []}')
+        self.assertTrue(self.out_dir.is_dir())
+        self.assertTrue(path.is_file())
+
+    def test_content_is_byte_identical_to_the_baseline(self):
+        text = '{"project": "x", "legend": {"a": "б"}, "features": [1]}\n'
+        path = sync_features._snapshot_registry(self.out_dir, text)
+        self.assertEqual(path.read_text(encoding="utf-8"), text)
+
+    def test_survives_an_already_existing_directory(self):
+        self.out_dir.mkdir(parents=True)
+        path = sync_features._snapshot_registry(self.out_dir, "{}")
+        self.assertEqual(path.read_text(encoding="utf-8"), "{}")
+
+    def test_snapshot_is_taken_before_the_agent_runs(self):
+        # Перевірка ПОРЯДКУ за текстом `main_sync`: сам порядок і є фіксом,
+        # а прогнати `main_sync` тут неможливо - вона ходить у мережу.
+        # Тест кусає рівно на тій регресії, що має значення: хтось пересуває
+        # знімок під виклик агента, і baseline знову існує лише в памʼяті.
+        source = inspect.getsource(sync_features.main_sync)
+        snapshot_at = source.index("_snapshot_registry(")
+        agent_at = source.index("_collect_result(")
+        self.assertLess(snapshot_at, agent_at)
 
 
 if __name__ == "__main__":
