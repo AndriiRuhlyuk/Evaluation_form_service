@@ -59,11 +59,14 @@ evaluation_form_service/
 ├── tools/sync_features/       # an LLM agent reconciles Features_list.json against git history,
 │                              # sandboxed by a PreToolUse hook - never by allowed_tools: README.md
 ├── .githooks/                 # the pre-commit quality gate - what it runs and why: gates.md
-└── .claude/                   # rules/ by layer + the three hooks that know about *this* repo
+├── .claude/                   # rules/ by layer + the three hooks that know about *this* repo
+└── CONTEXT.md                 # domain glossary: one canonical sense per term + what it is NOT
 ```
 
-`check-layout-drift.sh` verifies this tree against the real structure. Indentation is a
-contract - exactly 4 characters per level; the tracked-filename whitelist is in the script.
+`check-layout-drift.sh` verifies this tree against the real structure - but only
+**directories and whitelisted `.py` inside them**; a root-level file missing from the tree is
+invisible to it, so add those by hand. Indentation is a contract - exactly 4 characters per
+level; the tracked-filename whitelist is in the script.
 
 ## Commands
 
@@ -142,6 +145,11 @@ the Git Workflow (branch naming, commit prefixes - not restated here). `Progress
 roadmap, `Features_list.json` the feature registry with `done` flags, `docs/orchestration/`
 the per-feature plans; plan mode creates `docs/plans/` on demand. Planning docs are Ukrainian;
 the code-comment convention lives in `general.md`.
+
+`CONTEXT.md` is the domain glossary, and it is **canonical**: when a plan, a PRD or a comment
+uses a term in a sense that contradicts it, the glossary wins and the other text is the bug.
+Each entry carries what the term is NOT - that half exists because this domain is dense with
+homonyms (`form`, `manager`, `level`, `score`, `decision` each mean 2-4 different things).
 
 ## Path-specific Rules
 
