@@ -322,10 +322,17 @@ only run early would miss exactly the cases that mature during the conversation.
   | §7 Approaches | 450 |
   | §8 Four-lens review | 500 |
   | §9 Trade-offs and edge cases | 350 |
-  | §10-§12 | 300 |
-  | §13-§17 | 400 |
+  | §10-§12 | 350 |
+  | §13-§17 | 850 |
 
-  Total lands near 2500. When a section is over, compress *that* section - the budget
+  Total lands near 2900. The last two rows were corrected on 2026-09-02 after the first
+  real run: they had been inherited from a 15-section template and applied to a
+  17-section one, so §16 and §17 existed with no words allocated to them. The group
+  carries five numbered sections plus Related plus the DoD block; 400 was never
+  reachable. Treat every number here as measured-and-revisable, not as a law - a budget
+  invented rather than measured is the same disease it exists to cure, one level up.
+
+  When a section is over, compress *that* section - the budget
   names the target, so compression has an address instead of «cut something».
   §8 and §9 are the last to be cut, because §13 cites them and the next stage consumes them.
 
