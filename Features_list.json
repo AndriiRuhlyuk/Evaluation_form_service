@@ -1,6 +1,6 @@
 {
   "project": "Evaluation Form Service",
-  "updated": "2026-09-01",
+  "updated": "2026-09-02",
   "legend": { "true": "implemented", "false": "planned / backlog" },
 
   "features": [
@@ -260,21 +260,21 @@
       "id": "AI-2",
       "category": "ai",
       "name": "AI-assisted scoring",
-      "description": "Suggested score and rationale from interviewer notes/transcript; interviewer always confirms",
+      "description": "Considered and REJECTED 2026-09-02 during the ideation for AI-7 and AI-8. Kept rather than deleted, because a registry that retains only the winning options starts lying within a year about whether alternatives were ever weighed. The original shape - AI proposes a score plus a rationale from the interviewer's notes or the transcript, and the interviewer confirms it before submitting - is recorded in docs/features/ai-answer-scoring-from-transcript/idea-brief.md section 14 as a parked-and-rejected approach. The reason is anchoring: a suggested score visible before the interviewer has committed destroys the independence of the second opinion, and that independence is the entire downstream product value, because AI-8 exists to compare two judgements formed apart. Confirm-style assistance also cannot be undone once shipped - an interviewer who has seen a proposed number cannot un-see it, so there is no A/B to recover from. The accepted alternative scores independently and stays hidden until the interviewer's own feedback is submitted; the existing submitted-feedback lock already provides the natural boundary for that reveal, so no new gate is needed. This entry stays open rather than closed because a confirm-style assist may still be correct where no divergence signal is wanted downstream - drafting questions for the bank is the obvious candidate - but it must not sit on the interview-scoring path.",
       "done": false
     },
     {
       "id": "AI-7",
       "category": "ai",
       "name": "Note-taker integration with independent AI answer scoring",
-      "description": "Interview transcript from a note-taker (Recall.ai / Fireflies) mapped to form questions; AI independently scores each candidate answer on the same 0-3 scale",
+      "description": "Interview transcript from a note-taker (Recall.ai / Fireflies) mapped to form questions; AI independently scores each candidate answer on the same 0-3 scale. Brief: docs/features/ai-answer-scoring-from-transcript/idea-brief.md, status Confirmed 2026-09-02, RICE 7.0, feasibility 2 of 3, decision 'Approach C - Post-Submit Calibration Loop'. Deliberately NOT merged with AI-8: the brief's frontmatter cites the pair 'AI-7 + AI-8' as its ticket, so collapsing the two ids would break a citation that points here. AI-7 is the producer of the paired score, AI-8 the consumer; AI-7 is a hard prerequisite and nothing in AI-8 can be built or validated before it ships. The rejected alternative shape for this scoring is recorded under AI-2.",
       "done": false
     },
     {
       "id": "AI-8",
       "category": "ai",
       "name": "Divergence report (AI vs interviewer scores)",
-      "description": "Per-question comparison of AI and interviewer scores with rationale; used for interview quality control and interviewer calibration",
+      "description": "Per-question comparison of AI and interviewer scores with rationale; used for interview quality control and interviewer calibration. Brief: docs/features/divergence-report/idea-brief.md, status Confirmed 2026-09-02, RICE 9.0 computed at the measured floor of 45 disputed candidates per quarter (ceiling 120), feasibility 0 of 3 - blocked on AI-7, which does not exist in code. Decision: none of the three proposed approaches survived intact; the accepted shape is a hybrid assembled from all three - the containment of the cheapest one (no machine scores means an empty screen, not a broken one), the survival rule of the most invasive one stated as narrowly as it can be, an explicit marker so that 'not comparable' can never look like 'no divergence', and the interview-moment anchor of the most expensive one, without which three separate review lenses agreed the metric cannot move. One correction outranks all of them and is recorded here because it changes what gets built: the report is produced for EVERY completed evaluation, not only before a rejection. Building it only on the losing side makes the scorer unvalidatable - there is no comparison group, every retained report belongs to a rejected candidate - and it has the shape of selective application of an assessment instrument to the people being turned down. Residual risk, tracked as an open question in the brief: reading will still concentrate on rejections, so read frequency must be measured separately from build frequency, otherwise the one-sidedness returns through behaviour after being designed out of the construction.",
       "done": false
     },
     {
@@ -302,7 +302,7 @@
       "id": "AI-6",
       "category": "ai",
       "name": "HR analytics",
-      "description": "Interviewer load and consistency, hiring quality tracking, panel diversity, dashboards for hiring managers",
+      "description": "Interviewer load and consistency, hiring quality tracking, panel diversity, dashboards for hiring managers. Relationship to AI-8 clarified 2026-09-02: it is supplier-to-consumer, not duplication. AI-8 produces the per-question divergence between a human score and a machine score for one candidate, plus the calibration profile that accumulates those divergences per interviewer; this entry aggregates them across interviews and renders them. Neither entry should absorb the other - the consistency signal here is worthless without the pairing AI-8 defines, and the pairing is worthless to a hiring manager without the aggregation here. One caution carried over from the AI-8 devil's-advocate pass and worth reading before any dashboard is designed: 'who diverges most' is one obvious query away, and the moment it is answered on a dashboard, agreement with the machine becomes an unstated performance expectation with no notice and no appeal. The signal that this has happened is not a metric - it is interview panels becoming harder to staff, with scheduling given as the reason.",
       "done": false
     },
     {
