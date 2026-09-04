@@ -59,7 +59,7 @@ reach the DB, because `.env` names the docker network. Wired by
 Running tests after every edit instead would spend ten red intermediate states on one plan
 and push Claude into a micro-fix loop. That is the whole reason for the split.
 
-## The three hooks that belong to *this* repo
+## The four hooks that belong to *this* repo
 
 Everything else you see firing comes from the plugins. `.claude/settings.json` keeps only
 what is true here:
@@ -67,6 +67,7 @@ what is true here:
 | Hook | What it does |
 |---|---|
 | `check-layout-drift.sh` | `SessionStart` + `PostToolUse`. When it speaks, fix **Project Layout** in `CLAUDE.md` **and write the comment** - an unannotated path is worse than no line at all. Indentation is a contract: exactly 4 characters per level; the tracked-filename whitelist is documented in the script itself. |
+| `check-glossary-drift.sh` | `SessionStart` + `PostToolUse` on `Write\|Edit`, filtered to `CONTEXT.md` / `CONTEXT-MAP.md` by the path in the payload. Five checks: canon holding a stage-01 word, a delta whose feature shipped, the map disagreeing with the files on disk, the vendored `sdlc:fix-term` re-enabled by an `sdlc/` update, one term in two glossaries. **Reports, never blocks** - check 1 originally stood on `grep` and misfired on 4 of 11 real terms (`stage clone` lives as `clone_working_to_evaluation`), so it now reads the introducing commit instead. Backs the skill `fix-term-local`, which owns the write side. |
 | `reinject-context.sh` | `SessionStart` with `matcher: compact`. Reprints repo state and invariants, because path-scoped rules are **not** re-injected after `/compact` - they reload the next time a matching file is opened. |
 | `session-telemetry.py` | `SessionEnd`, `async`, counts into `.claude/telemetry.jsonl`. |
 | `InstructionsLoaded` jq line | Appends one JSON line per rule load to `.claude/instructions.log` (gitignored): the rule file, the `trigger` file that matched, and the `globs` that did it. When a rule seems ignored, read this - `/memory` will not help, it lists the CLAUDE.md family only and never scans `.claude/rules/`. A missing line means the glob did not match, not that the rule was skipped. |

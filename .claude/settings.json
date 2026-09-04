@@ -49,6 +49,16 @@
             "statusMessage": "звірка структури проєкту"
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/check-glossary-drift.sh PostToolUse",
+            "statusMessage": "звірка глосаріїв"
+          }
+        ]
       }
     ],
     "SessionStart": [
@@ -58,6 +68,11 @@
             "type": "command",
             "command": "bash .claude/hooks/check-layout-drift.sh SessionStart",
             "statusMessage": "звірка структури проєкту"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/check-glossary-drift.sh SessionStart",
+            "statusMessage": "звірка глосаріїв"
           }
         ]
       },
