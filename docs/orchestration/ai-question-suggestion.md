@@ -37,10 +37,10 @@
 |---|---|---|
 | `Question.QuestionSource.GENERATED` | [question/models.py](../../question/models.py) | Позначка походження AI-питань, уже зарезервована в моделі |
 | `usage_count`, `last_used_at` | [question/models.py](../../question/models.py) | Сигнал "питання затерте", входить у ранжування |
-| Голосування за видалення (`toggle_item_vote`, `EffectiveDeletionMixin`) | [working_form/services.py](../../working_form/services.py), [working_form/utils.py](../../working_form/utils.py) | Готовий механізм відхилення AI-питань людьми |
+| deletion vote (`toggle_item_vote`, `EffectiveDeletionMixin`) | [working_form/services.py](../../working_form/services.py), [working_form/utils.py](../../working_form/utils.py) | Готовий механізм відхилення AI-питань людьми |
 | `WorkingFormConsumer`, `ws/working_form/<id>/` | [working_form/consumers.py](../../working_form/consumers.py) | Доставка результату всім учасникам кімнати |
 | Celery + beat | [evaluation_form/tasks.py](../../evaluation_form/tasks.py) | Фонове виконання AI-виклику |
-| Снапшот-патерн `BaseFormItems` | [template_form/models.py](../../template_form/models.py) | AI-питання зберігаються історично точно, як і будь-які інші |
+| snapshot-патерн `BaseFormItems` | [template_form/models.py](../../template_form/models.py) | AI-питання зберігаються історично точно, як і будь-які інші |
 
 ---
 
@@ -52,7 +52,7 @@
 | AI-питання потрапляють у форму як звичайні `WorkingFormItem` зі `source=GENERATED` і відхиляються існуючим голосуванням | Потрібна окрема модель "пропозиція" і власний approve-флоу: +1 спринт |
 | Компетенція - параметр запиту (текст), а не нова модель | Якщо бізнес вимагає довідник компетенцій - тягнемо `Competency` + M2M до `Topic` з Фази 6, це вихід за скоуп |
 | Провайдер - Claude API, виклик через Celery, результат прилітає по наявному WebSocket | Синхронний виклик підвісить HTTP-запит на 10-30 сек, потрібен інший UX |
-| Рівень вакансії (`WorkingForm.level`) мапиться на діапазон `difficulty` детермінованим правилом, а не рішенням моделі | Ранжування стає недетермінованим, тести на фікстурах написати неможливо |
+| vacancy level (`WorkingForm.level`) мапиться на діапазон `difficulty` детермінованим правилом, а не рішенням моделі | Ранжування стає недетермінованим, тести на фікстурах написати неможливо |
 | Компетенція впливає на ранжування через PostgreSQL FTS по `question_text` | Якщо якість FTS-ранжування виявиться низькою - другий AI-виклик на re-rank, +вартість і +латентність |
 
 ---
@@ -131,7 +131,7 @@
 
 | | |
 |---|---|
-| **Ціль** | Сценарій end-to-end: шаблон → working form → suggest → голосування → approve → `clone_working_to_evaluation`; перевірка, що снапшот зберігає AI-питання разом із `source`; прогін усіх існуючих тестів на регресію |
+| **Ціль** | Сценарій end-to-end: шаблон → working form → suggest → голосування → approve → `clone_working_to_evaluation`; перевірка, що snapshot зберігає AI-питання разом із `source`; прогін усіх існуючих тестів на регресію |
 | **Тип агента / tools** | testing + review: Bash, Read |
 | **Вхід** | Гілка з результатами sub-tasks 2-4 |
 | **Вихід** | Звіт: що зелене, що впало, де покриття діряве, список ризиків |
