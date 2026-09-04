@@ -31,7 +31,8 @@ WHITELIST="services.py consumers.py middleware.py routing.py tasks.py utils.py c
 # Те, що не версіонується, у дереві не описують - воно нічого не каже про проєкт.
 # .superpowers - скретч-журнал subagent-driven-development, живе лише поки триває фіча.
 # sdlc - сторонній SDLC-тулкіт, гітігнорований разом з усім вмістом (.gitignore: /sdlc/).
-IGNORE_DIRS="^(\.git|\.venv|\.idea|\.superpowers|sdlc|__pycache__|staticfiles|media|reports|node_modules|htmlcov)$"
+# pocock - чужі скіли як еталон форми, гітігноровані так само (.gitignore: /pocock/).
+IGNORE_DIRS="^(\.git|\.venv|\.idea|\.superpowers|sdlc|pocock|__pycache__|staticfiles|media|reports|node_modules|htmlcov)$"
 
 emit() {
   jq -nc --arg e "$event" --arg c "$1" '{
