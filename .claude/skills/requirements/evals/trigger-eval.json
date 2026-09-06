@@ -1,0 +1,23 @@
+[
+  {"query": "у мене в docs/features/feedback-deadlines лежить бриф, вчора поставив Confirmed. треба з нього зробити щось таке, щоб Сергій сів і зробив, а не ходив до мене з питаннями кожен день", "should_trigger": true},
+  {"query": "юристи написали що транскрипт тепер зберігаємо рік а не пів року. де в нас це записано, треба оновити", "should_trigger": true},
+  {"query": "напиши критерії приймання для нагадувань про здачу фідбеку. п'ять штук вистачить?", "should_trigger": true},
+  {"query": "оформи цей бриф у вимоги будь ласка, divergence-report", "should_trigger": true},
+  {"query": "глянь PRD по ai-answer-scoring-from-transcript і скажи чи його можна віддавати в роботу чи там ще дірки", "should_trigger": true},
+  {"query": "шо саме ми будуємо в цій фічі? мені треба щоб було чорним по білому, бо минулого разу зробили не те", "should_trigger": true},
+  {"query": "специфікація для template-form-versioning, розмір десь S думаю", "should_trigger": true},
+  {"query": "треба документ який можна віддати підряднику. фіча про те що рекрутер бачить хто з інтервʼюерів систематично завищує бали", "should_trigger": true},
+  {"query": "додай у вимоги по divergence-report ще один випадок: коли транскрипт не прикріпили взагалі. і код помилки під нього", "should_trigger": true},
+  {"query": "requirements calibration-profile", "should_trigger": true},
+
+  {"query": "є сира ідея: показувати рекрутеру хто з панелі розходиться з рештою. ще нічого не думав, давай розкопаємо чи взагалі варто", "should_trigger": false},
+  {"query": "як нам це зберігати? окрема таблиця чи JSONB-колонка в evaluation_form? і чи треба індекс", "should_trigger": false},
+  {"query": "додай термін «калібрувальна картка» в CONTEXT.md, а то ми його вже втретє по-різному вживаємо", "should_trigger": false},
+  {"query": "напиши тести на ці критерії приймання, working_form/tests.py, APITestCase як у решті репо", "should_trigger": false},
+  {"query": "які ендпоінти треба під цю фічу і які статуси вони віддають на відмову", "should_trigger": false},
+  {"query": "розпиши цю фічу на задачі для трекера, щоб кожна була на пів дня максимум", "should_trigger": false},
+  {"query": "у Features_list.json entry AI-3 стоїть done false, а фіча вже в проді. пофіксь реєстр", "should_trigger": false},
+  {"query": "напиши README для tools/sync_features, там зараз нічого немає і ніхто не розуміє як його запускати", "should_trigger": false},
+  {"query": "перевір чи clone_working_to_evaluation правильно копіює критерії, здається там губиться порядок питань", "should_trigger": false},
+  {"query": "зроби ADR по тому чому ми обрали Channels а не поллінг, заднім числом, бо ніхто вже не памʼятає", "should_trigger": false}
+]

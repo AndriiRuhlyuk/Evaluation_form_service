@@ -1,0 +1,129 @@
+{
+  "skill_name": "requirements",
+  "notes": "Revised 2026-09-07. Two changes over the 2026-09-06 set. (1) Cases are split by tier: `headless` runs with a subagent and no human, `interactive` cannot, because this skill's whole middle is AskUserQuestion and a subagent has nobody to ask - running those two headless measured refusal-to-invent, not the interview. (2) Added E-A4, which is the first case that discriminates the post-2026-09-07 skill from its predecessor on something other than refusal wording: the validator script. Assertions are phrased by the ROLE of a section rather than its number, so they stay evaluable against a document this skill did not write.",
+  "harness": "See ./README.md. `claude plugin eval` is early-access-gated on this account, so the runnable harness is example-skills:skill-creator with subagents - one arm on the live skill, one on a snapshot of the previous version.",
+  "evals": [
+    {
+      "id": "A1",
+      "tier": "headless",
+      "name": "refuses-without-confirmed-brief",
+      "prompt": "напиши вимоги для фічі notification-digest. брифу ще немає, але ідея проста: раз на день слати рекрутеру зведення по всіх формах, де щось змінилось. давай одразу PRD, бриф потім допишемо",
+      "expected_output": "A refusal that names the missing input, points at the prior stage, and does not offer to proceed anyway on assumptions.",
+      "discriminates": "no - both versions refuse. This is a regression guard, not a measurement.",
+      "assertions": [
+        "No PRD file and no feature directory are created for notification-digest",
+        "The response names the missing input explicitly as the idea-brief",
+        "The response points the user at the discovery skill as the next step",
+        "The response does NOT offer to write the PRD anyway on stated assumptions, and does not offer to write the brief itself in place of the prior stage",
+        "The response contains no moralising about process discipline: it states the gap, states the next action, and stops",
+        "The response does not print a slash command, since none exists in this repository"
+      ],
+      "depends_on_repo_state": ["docs/features/notification-digest/ does not exist"],
+      "files": []
+    },
+    {
+      "id": "A2",
+      "tier": "headless",
+      "name": "catches-two-stage-scope",
+      "prompt": "бриф docs/features/divergence-report/idea-brief.md Confirmed, давай з нього вимоги. і заодно додай туди, щоб при складанні форми під вакансію було видно, хто з панелі зазвичай розходиться з рештою - щоб не ставити двох таких в одну панель",
+      "expected_output": "The stage gate stops before drafting and offers two slugs in dependency order.",
+      "discriminates": "no - regression guard on the stage gate.",
+      "assertions": [
+        "No single document is produced that covers both the per-candidate and the per-vacancy stage",
+        "The response names both pipeline stages in domain language rather than by code path",
+        "The response offers two named slugs and states which must ship first, with the reason",
+        "The user was given a way to answer that the request covers both stages, rather than being forced to pick one of four",
+        "The explanation of why one document cannot hold both is in plain Ukrainian without jargon"
+      ],
+      "depends_on_repo_state": ["docs/features/divergence-report/idea-brief.md exists with status: Confirmed"],
+      "files": []
+    },
+    {
+      "id": "A3",
+      "tier": "headless",
+      "name": "updates-a-foreign-document-without-converting-it",
+      "prompt": "у docs/features/ai-answer-scoring-from-transcript/ лежить PRD, читав, поставив Approved. юристи сказали строк зберігання транскрипту тепер рік замість пів року. онови",
+      "expected_output": "The skill recognises this as an update to a document it did not write, changes only the retention number wherever it appears, does not renumber or convert, and says out loud that the irreversible decision has no proper home in this shape.",
+      "discriminates": "partly - the pre-2026-09-07 version has no validator to run and no rule that its warnings are advisory on a foreign document.",
+      "assertions": [
+        "The document still has the same section headings it started with: nothing was renumbered and no new numbered sections were inserted",
+        "Every section the request did not touch is byte-identical to the input",
+        "The retention number is updated in every place it appears, not just one",
+        "The response states that this document was not produced by this skill and has fewer sections than the skill's own shape",
+        "The irreversible nature of the retention change is recorded somewhere in the document, and the response says it has no proper register in this shape",
+        "Migration to the twelve-section shape is offered as separate work rather than performed",
+        "The status is not changed from Approved without asking the user first",
+        "The missing sections are reported as warnings or as migration items, never as a reason the document fails"
+      ],
+      "depends_on_repo_state": ["The feature folder holds a PRD with status: Approved, 8 numbered sections and no error catalogue"],
+      "files": []
+    },
+    {
+      "id": "A4",
+      "tier": "headless",
+      "name": "audits-an-existing-prd-and-finds-the-quiet-defects",
+      "prompt": "глянь docs/features/ai-answer-scoring-from-transcript/PRD-write-prd.md і скажи, чи його можна віддавати розробникам. якщо ні - що конкретно бракує",
+      "expected_output": "A verdict backed by the validator's output rather than by prose impression: the criteria carry no observation point, the frontmatter is missing fields, four sections run over budget, and the missing sections are a migration item rather than a failure.",
+      "discriminates": "YES - this is the case the eval set previously had no equivalent of. The predecessor had to hand-check eleven prose bullets across three files and, on a document whose criteria section is not called §5, reliably missed the observation-point floor.",
+      "assertions": [
+        "The answer reports that not one acceptance criterion names an observation point, and treats that as blocking",
+        "The answer distinguishes blocking findings from advisory ones rather than presenting one flat list",
+        "The missing sections are named as a migration item, not as a reason the document fails",
+        "At least one finding is quantitative - a count, a section budget, a named missing field - rather than an impression",
+        "The audit is performed by running the validator script, not by re-deriving the checks in prose",
+        "The critic ran in clean context: the script cannot see a contradiction between two sections, and an audit without it is a lint",
+        "No file is modified: the user asked whether it can ship, not for it to be fixed"
+      ],
+      "run_2026_09_07": "Both arms reached the same core verdict. The predecessor spent 20 tool calls and 675s, hand-reassembling the awk token scan, the grep -c pair and a python word count against budgets.md - exactly the three checks the script now bundles, which is the signal skill-creator says means bundle it. The new arm spent 13 calls and 316s. But the new arm skipped the critic and the old one did not, so the old answer was richer. That gap was the finding: neither version had a written audit mode, so each improvised one. Audit mode is now in SKILL.md and this case gained the critic assertion above. NOTE: the two arms of A3 and A4 shared one arena, and the A3 arm edited the document while the A4 arm was reading it - the old-arm timings are therefore an upper bound, not a clean measurement. Give each arm its own arena next round.",
+      "depends_on_repo_state": ["docs/features/ai-answer-scoring-from-transcript/PRD-write-prd.md exists, produced by another tool"],
+      "files": []
+    },
+    {
+      "id": "B1",
+      "tier": "interactive",
+      "name": "brief-to-prd-happy-path",
+      "prompt": "у нас лежить бриф docs/features/divergence-report/idea-brief.md, він Confirmed. треба з нього зробити нормальний документ, щоб розробник міг сісти і зробити, а не питати мене щодня. я не технічний, тому питай простими словами",
+      "expected_output": "PRD.md with all 12 sections, status Draft, .size as one line, one row in Features_list.json. Questions in Ukrainian with three blocks, a recommended first option, an example answer and a per-option consequence.",
+      "why_interactive": "Nine checkpoints, of which 9.25 renders the whole criteria section and walks part of it. A subagent answers its own questions, which measures the model's self-consistency rather than the skill.",
+      "assertions": [
+        "The produced document has all twelve numbered section headings, 1 through 12",
+        "The frontmatter holds no unfilled angle-bracket placeholder",
+        "The acceptance-criteria section contains at least one criterion of each of the five kinds and at least one per user story",
+        "Every criterion carries its own observation-point line",
+        "The acceptance-criteria section contains zero dotted error codes, HTTP verbs, URL paths or bare status numbers",
+        "An error catalogue exists with all four columns filled for every error criterion",
+        "The assumptions section lists 3 to 5 assumptions, each with a consequence and a cheapest check",
+        "The one-way-door register holds at least one row, and every row carries a confirming name",
+        "The criteria section was rendered in full before any per-criterion question was asked",
+        "An edits log exists and was handed to the critic; it holds entries only for changed items",
+        "Every question asked carried a first option marked (Рекомендовано) and an example of the answer",
+        "The size file holds exactly one line with one of XS S M L XL",
+        "Features_list.json gained exactly one row for this feature with done false and the slug in its description",
+        "The validator script was run and its output reported"
+      ],
+      "depends_on_repo_state": [
+        "docs/features/divergence-report/idea-brief.md exists with status: Confirmed",
+        "docs/features/divergence-report/CONTEXT.md and the root CONTEXT.md exist"
+      ],
+      "files": []
+    },
+    {
+      "id": "B2",
+      "tier": "interactive",
+      "name": "separates-errors-from-states",
+      "prompt": "з брифу docs/features/divergence-report/idea-brief.md зроби вимоги. і зроби каталог кодів помилок повним - я хочу код на кожен випадок, коли людина відкриває звіт і не бачить розбіжностей: коли фідбек здав тільки один інтерв'юер, коли транскрипт ще не прикріпили, коли оцінка ще рахується, і коли розбіжностей справді немає",
+      "expected_output": "The skill recognises that most of the four named cases are states rather than errors, keeps codes for the genuine refusals only, and makes sure a state never renders as an empty screen that reads like 'no divergence'.",
+      "why_interactive": "The user is pushing against the skill's own rule, so the value of the case is in how it argues back across several turns.",
+      "assertions": [
+        "At least two of the four cases named by the user are classified as states rather than errors",
+        "The cases classified as states carry no error code",
+        "The document explains, in plain Ukrainian, why treating a state as an error would show the user the opposite of the truth",
+        "A criterion exists covering what the user actually sees in at least one state case, and it is not an error criterion",
+        "The genuine refusals still have codes, and those codes follow the area.reason convention",
+        "The acceptance-criteria section contains zero dotted error codes"
+      ],
+      "depends_on_repo_state": ["docs/features/divergence-report/idea-brief.md exists with status: Confirmed"],
+      "files": []
+    }
+  ]
+}
