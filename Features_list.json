@@ -1,6 +1,6 @@
 {
   "project": "Evaluation Form Service",
-  "updated": "2026-09-02",
+  "updated": "2026-09-07",
   "legend": { "true": "implemented", "false": "planned / backlog" },
 
   "features": [
@@ -267,7 +267,7 @@
       "id": "AI-7",
       "category": "ai",
       "name": "Note-taker integration with independent AI answer scoring",
-      "description": "Interview transcript from a note-taker (Recall.ai / Fireflies) mapped to form questions; AI independently scores each candidate answer on the same 0-3 scale. Brief: docs/features/ai-answer-scoring-from-transcript/idea-brief.md, status Confirmed 2026-09-02, RICE 7.0, feasibility 2 of 3, decision 'Approach C - Post-Submit Calibration Loop'. Deliberately NOT merged with AI-8: the brief's frontmatter cites the pair 'AI-7 + AI-8' as its ticket, so collapsing the two ids would break a citation that points here. AI-7 is the producer of the paired score, AI-8 the consumer; AI-7 is a hard prerequisite and nothing in AI-8 can be built or validated before it ships. The rejected alternative shape for this scoring is recorded under AI-2.",
+      "description": "Interview transcript from a note-taker (Recall.ai / Fireflies) mapped to form questions; AI independently scores each candidate answer on the same 0-3 scale. Brief: docs/features/ai-answer-scoring-from-transcript/idea-brief.md, status Confirmed 2026-09-02, RICE 7.0, feasibility 2 of 3, decision 'Approach C - Post-Submit Calibration Loop'. Deliberately NOT merged with AI-8: the brief's frontmatter cites the pair 'AI-7 + AI-8' as its ticket, so collapsing the two ids would break a citation that points here. AI-7 is the producer of the paired score, AI-8 the consumer; AI-7 is a hard prerequisite and nothing in AI-8 can be built or validated before it ships. The rejected alternative shape for this scoring is recorded under AI-2. Slug: ai-answer-scoring-from-transcript, size L, PRD Draft 2026-09-07 via the requirements skill. The PRD carries one change nobody expected from a scoring feature and it is the riskiest part of the work: completion stops being automatic. After the last interviewer submits, the evaluation waits for the recruiter to either confirm that no transcript is coming or attach one, and unscored questions are deleted only after that decision - so a form can now stall on a person, in a place where nothing used to stall. Four one-way doors are confirmed by name in the PRD, the sharpest being a six-month retention on verbatim candidate transcripts.",
       "done": false
     },
     {
@@ -275,6 +275,13 @@
       "category": "ai",
       "name": "Divergence report (AI vs interviewer scores)",
       "description": "Per-question comparison of AI and interviewer scores with rationale; used for interview quality control and interviewer calibration. Brief: docs/features/divergence-report/idea-brief.md, status Confirmed 2026-09-02, RICE 9.0 computed at the measured floor of 45 disputed candidates per quarter (ceiling 120), feasibility 0 of 3 - blocked on AI-7, which does not exist in code. Decision: none of the three proposed approaches survived intact; the accepted shape is a hybrid assembled from all three - the containment of the cheapest one (no machine scores means an empty screen, not a broken one), the survival rule of the most invasive one stated as narrowly as it can be, an explicit marker so that 'not comparable' can never look like 'no divergence', and the interview-moment anchor of the most expensive one, without which three separate review lenses agreed the metric cannot move. One correction outranks all of them and is recorded here because it changes what gets built: the report is produced for EVERY completed evaluation, not only before a rejection. Building it only on the losing side makes the scorer unvalidatable - there is no comparison group, every retained report belongs to a rejected candidate - and it has the shape of selective application of an assessment instrument to the people being turned down. Residual risk, tracked as an open question in the brief: reading will still concentrate on rejections, so read frequency must be measured separately from build frequency, otherwise the one-sidedness returns through behaviour after being designed out of the construction.",
+      "done": false
+    },
+    {
+      "id": "AI-9",
+      "category": "ai",
+      "name": "Evaluator learns from recruiter corrections",
+      "description": "Every recruiter decision made while reviewing questions that only the machine scored - the answer was there, or it was not - is kept as training signal so the evaluator gets better at locating an answer inside a continuous conversation. Raised by the feature owner during the PRD interview for ai-answer-scoring-from-transcript on 2026-09-07 and deliberately kept OUT of that PRD: model training is a different stage and a different size, and folding it in would have doubled the feature. Depends on AI-7, which produces both the machine score and the recruiter decision this entry would learn from; there is nothing to train on until AI-7 ships. Read the AI-7 PRD section on the recruiter review before designing this: the recruiter is the only person who can see the transcript, so the corrections are unreviewable by anyone else, and training on an unreviewed signal compounds whatever bias that one role carries.",
       "done": false
     },
     {
