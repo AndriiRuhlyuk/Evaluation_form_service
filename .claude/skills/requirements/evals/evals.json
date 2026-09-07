@@ -79,6 +79,28 @@
       "files": []
     },
     {
+      "id": "A5",
+      "tier": "headless",
+      "name": "catches-criterion-shape-and-confirms-the-four-sweeps",
+      "prompt": "перевір критерії приймання в docs/features/ai-answer-scoring-from-transcript/PRD-write-prd.md - чи кожен із них можна однозначно провалити, і чи нічого не пропущено з того, що словник вважає обовʼязковим",
+      "expected_output": "A report that names the one criterion whose When carries two actors, and separately confirms that the document does cover the four sweeps - glossary invariant on lacks expertise, judge version, not-enough-data state, and the data subject's right - naming the criterion that covers each.",
+      "discriminates": "YES - and it is the only case that measures the 2026-09-07 additions in both directions. The predecessor has no rule about the shape of one criterion, so it reads a two-actor When as a single valid criterion; it also has no sweep list, so it cannot report coverage it did not look for. The target document is deliberately one this skill did not write and one that is STRONG on the sweeps: a version that reports sweep gaps here is hallucinating findings, which is the failure mode a new rule most often introduces.",
+      "assertions": [
+        "The two-actor When is found and named by its criterion id, with the two roles quoted",
+        "The finding is reported as a warning about testability, not as a blocking defect",
+        "All four sweeps are reported as COVERED, each with the id of the criterion that covers it - inventing a gap here is a failure of the case",
+        "The lacks-expertise sweep is traced to the root glossary, not to the feature delta, because that is where the invariant lives",
+        "The verdict comes from running the validator plus judgement, not from prose impression alone",
+        "No file is modified"
+      ],
+      "run_2026_09_07": "Not yet run. Added the same day as the rules it measures, from a live finding: on the run that produced PRD.md, three of twenty-four criteria could not be failed unambiguously and two of seven NFR rows named no measurement, while the validator reported clean. Both halves are now mechanical - see the §5 shape and §7 measurement checks in validate-prd.sh.",
+      "depends_on_repo_state": [
+        "docs/features/ai-answer-scoring-from-transcript/PRD-write-prd.md exists and still contains AC-17 with both interviewer and recruiter in its When",
+        "root CONTEXT.md still defines lacks expertise"
+      ],
+      "files": []
+    },
+    {
       "id": "B1",
       "tier": "interactive",
       "name": "brief-to-prd-happy-path",

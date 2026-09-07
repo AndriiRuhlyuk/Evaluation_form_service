@@ -186,6 +186,43 @@ if len(set(crit_ids)) != len(crit_ids):
     dup = [c for c in set(crit_ids) if crit_ids.count(c) > 1]
     fail("§5 observation", f"повторені номери критеріїв: {', '.join(sorted(dup))}")
 
+# ---------- §5: форма одного критерію ----------
+# Правило: references/ac-floors.md, розділ «Форма одного критерію».
+# Наявність Given/When/Then - провал, тієї ж природи, що й відсутність точки
+# спостереження. Злиття акторів і дій - попередження: відрізнити злиття від
+# багатогранності гріпом неможливо, а жорстка заборона вчить обходити скрипт.
+# Додано 2026-09-07: усі 24 критерії пройшли пороги, і три з них не можна було
+# провалити однозначно.
+sec4_roles = set(re.findall(r"^\*\*(?:Як|As a)\*\*\s+([A-Za-zА-Яа-яЇїІіЄєҐґ'’-]+)",
+                            role("stories", 4), re.M))
+SPLIT_MARKERS = (", а потім", ", а далі", ", потім ", ", а тоді")
+
+for block in re.split(r"^###\s+", sec5, flags=re.M)[1:]:
+    name = block.split("\n", 1)[0].strip()
+    if not name.startswith("AC-"):
+        continue
+    parts = {}
+    for label in ("Given", "When", "Then"):
+        m = re.search(rf"^\*\*{label}\*\*\s+(.+)$", block, re.M)
+        parts[label] = m.group(1).strip() if m else None
+    missing = [k for k, v in parts.items() if not v]
+    if missing:
+        fail("§5 shape", f"{name}: немає {', '.join(missing)}")
+        continue
+    when, then = parts["When"], parts["Then"]
+    actors = {r for r in sec4_roles if re.search(rf"\b{re.escape(r)}\b", when)}
+    if len(actors) > 1:
+        warn("§5 shape", f"{name}: у When два актори ({', '.join(sorted(actors))}) "
+                         "- критерій не провалиться однозначно")
+    if any(mk in when for mk in SPLIT_MARKERS):
+        warn("§5 shape", f"{name}: у When дві дії поспіль - розділити або сказати, "
+                         "що правило для обох дослівно те саме")
+    if len(then.split()) > 25:
+        warn("§5 shape", f"{name}: Then має {len(then.split())} слів проти 25 "
+                         "- усередині ймовірно кілька критеріїв")
+    elif then.count(";") >= 2:
+        warn("§5 shape", f"{name}: Then містить {then.count(';') + 1} тверджень")
+
 # ---------- §5: кожна історія має критерій ----------
 sec4 = role("stories", 4)
 stories = re.findall(r"^###\s+(US-\d+)", sec4, re.M)
@@ -230,6 +267,18 @@ for r in data_rows(sec7):
         fail("§7", f"ціль без числа: «{target}» у рядку «{cells[0][:40]}»")
     elif re.search(ADJECTIVES, target, re.I):
         fail("§7", f"прикметник у цілі: «{target}» - надія, а не вимога")
+    # Третя колонка: джерело числа, не виправдання числа. Правило й приклади -
+    # references/nfr-defaults.md. Попередження, бо межа тут тонка: рядок може
+    # називати сусідній замір і цим бути валідним. Знайдено 2026-09-07 -
+    # усі рядки мали числа, і два з семи не мали вимірювання взагалі.
+    how = cells[2].strip() if len(cells) >= 3 else ""
+    if not how:
+        warn("§7 measurement", f"«{cells[0][:40]}»: колонка «як міряємо» порожня")
+    elif len(how.split()) < 3:
+        warn("§7 measurement", f"«{cells[0][:40]}»: «{how}» замало, щоб піти й поміряти")
+    elif re.match(r"^(бо |як у |при цьому|людина |нікого |це )", how, re.I):
+        warn("§7 measurement", f"«{cells[0][:40]}»: «{how[:50]}» пояснює число, "
+                               "а не каже, де його взяти")
 
 # ---------- §11: baseline, target, строк ----------
 sec11 = role("kpi", 11)
@@ -246,11 +295,16 @@ sec12 = role("oq", 12)
 # І українські, і англійські мітки: чужий документ пише owner/due.
 OWNER = re.compile(r"власник\s*:|owner\s*:", re.I)
 DUE = re.compile(r"\bдо\s*:|due\s*:", re.I)
+DEFAULT = re.compile(r"поки що\s*:|default now\s*:", re.I)
 for line in [l for l in sec12.splitlines() if l.strip().startswith("- [")]:
     if not OWNER.search(line):
         fail("§12", f"немає власника: {line.strip()[:80]}")
     if not DUE.search(line):
         fail("§12", f"немає дати: {line.strip()[:80]}")
+    # Що діє до відповіді. Без цього читач не відрізнить невирішене від
+    # нерозвʼязаного. Попередження, бо чужий документ пише це інакше.
+    if not FOREIGN and not DEFAULT.search(line):
+        warn("§12 default", f"не сказано, що діє до відповіді: {line.strip()[:70]}")
 
 # ---------- бюджети довжини ----------
 budgets = {}

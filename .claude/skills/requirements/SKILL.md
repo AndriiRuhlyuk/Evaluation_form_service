@@ -279,6 +279,13 @@ It is the single source; nothing restates it.
 In one line, so you know what you are reading for: §5 is business language only, Given / When /
 Then from the actor's point of view, and every criterion names its observation point.
 
+Two things in that file are newer than the rest and are the ones a run skips: **the shape of a
+single criterion** - one actor, one action in `When`, one observable statement in `Then` - and
+**the four sweeps** that no floor can catch, because a floor is satisfied by one criterion of
+each kind. The sweeps are glossary invariants, the version of whoever judged, the state where
+there is not enough data yet, and the right of the person the new data is about. Do all four
+before calling §5 drafted; each of them found a real gap on 2026-09-07.
+
 **§6 is where the codes live**, and only there. Each error criterion gets a row; a state gets
 none. Format → [./references/error-catalogue.md](./references/error-catalogue.md).
 
@@ -321,7 +328,15 @@ what remains after it is off. Data already collected does not un-collect.
 Every metric: baseline → target → timeframe. `baseline: 0` is fine for something new;
 `baseline: TBD` needs a measurement plan in the same line. Every open question carries an owner
 and a due, where the due may be a stage. A question without both is not an open question, it is
-a shrug.
+a shrug. Every open question also carries **what holds until it is answered** - the default the
+document runs on meanwhile. Without it the reader cannot tell an unanswered question from an
+unmade decision.
+
+**A metric that measures how people behave gets a corridor, not a ceiling.** Adoption, appeal
+rate, how often something is opened: both edges mean something, and naming one edge hides the
+other. «Appeals under 5% means nobody uses the channel, over 20% means nobody trusts the
+machine» is a target. «No more than 20%» silently declares zero to be success, and zero is the
+failure that looks like triumph.
 
 ### 9.25. Show the draft and walk §5 (AskUserQuestion - mandatory)
 
@@ -490,6 +505,12 @@ What the script cannot see, and therefore has to be checked here:
 - Four-risks check ran; any thin risk became an assumption or an open question.
 - §5 was rendered whole at 9.25 and walked to the extent the depth requires; the three floors
   were re-run **after** the walk; nothing was renumbered during it.
+- The four sweeps from `ac-floors.md` ran: glossary invariants, version of the judge, the
+  not-enough-data state, and the right of the person the new data is about. A sweep that found
+  nothing is fine; a sweep that did not run is the failure, and it is invisible afterwards.
+- Every §7 row's third column names **where the number is measured**, not why it is that number.
+- Every metric about how people behave carries both edges, not just a ceiling.
+- Every §12 line says what holds until the question is answered.
 - At easy depth the ledger went out and came back, every line accepted or turned into a real
   question.
 - The glossary batch is empty: every domain word matches a `CONTEXT.md` entry or went to
@@ -522,6 +543,13 @@ list stays scannable at the moment it is needed.
 - Treating an empty search as permission to guess.
 - Opening the database to answer a product question.
 - An adjective where §7 wants a number.
+- A §7 row whose third column explains the number instead of saying where to measure it.
+- A criterion whose `When` carries two actors, or three actions with three different outcomes.
+- An accumulating screen - a share, a trend, a profile - with no criterion for the moment when
+  there is not enough data to mean anything.
+- A feature that stores a judgement about a person and never says what happens to old
+  judgements when the judge is replaced.
+- A behaviour metric with a ceiling and no floor, where zero would count as success.
 - A four-line §8 in a product that stores what a candidate said.
 - A risk written without the assumption underneath it.
 - A one-way door recorded as confirmed with no name against it.
