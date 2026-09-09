@@ -439,15 +439,36 @@ Redis під чергу задач оцінювання (ADR-0006) — і жод
 <!-- 📋 Що писати: таблиця концепт / конвенція / де визначено. Один рядок на концепт.      -->
 <!-- 📌 Приклад: «UUID v7 (час+випадковий, сортується) у app-layer» — як default з CLAUDE.md. -->
 
+Усе, крім двох останніх рядків, успадковується з репозиторію без змін — це чинні домовленості, а не
+рішення цієї фічі.
+
 | Concept | Convention | Where defined |
 |---|---|---|
-| Logging | <e.g. structured slog, fields `module=<name>`> | <CLAUDE.md §X or here> |
-| Authentication | <e.g. JWT via session middleware> | <CLAUDE.md §X> |
-| Error handling | <e.g. domain sentinel → ports/errors.go → apperr JSON> | <CLAUDE.md §X> |
-| ID strategy | <e.g. UUID v7 in app layer> | <CLAUDE.md §X> |
-| Internationalisation | <e.g. N/A, English only> | — |
-| Observability | <e.g. OpenTelemetry on HTTP boundaries> | — |
-| Outbox / events | <module-specific patterns, if any> | <here> |
+| Authentication | JWT через `djangorestframework_simplejwt`, вхід за email | наявна, `settings.py` |
+| Authorization | класи в `permissions.py` свого застосунку; нові класи живуть в `ai_scoring` | `.claude/rules` |
+| Transactions | `@transaction.atomic` на будь-якій багаторядковій мутації | `.claude/rules/domain/services.md` |
+| Layering | мутації лише в `services.py`, ніколи у `views.py` чи серіалізаторах | `.claude/rules/general.md` |
+| Error handling | конвенція кодів PRD §6 (`evaluation.transcript_unreadable`, `access.*`) **лише для нових відмов**; наявні лишаються як є | PRD §6 + §12 (відкрите питання власника) |
+| Secrets | ключ доступу до AI evaluator живе в `.env` поруч із `PEOPLEFORCE_API_KEY`; у код і логи не потрапляє | §2 |
+| ID strategy | автоінкремент Django, як у решті моделей конвеєра | наявна конвенція |
+| Internationalisation | не застосовується — повідомлення українською, як у PRD §6 | — |
+| Retention | півроку від дати інтерв'ю; видаляє періодична задача, бали й картки переживають видалення | PRD §8, AC-16 |
+| Observability | `prometheus_client`, ендпоінт метрик, лічильники в адаптері | ADR-0007, §7 |
+| WebSocket broadcast | **не застосовується**: каналів у `evaluation_form` немає, вони існують лише у `working_form`. Сповіщення «бали готові» у цей обсяг не входить | §5 |
+| Logging | **прогалина**: `LOGGING` у `settings.py` не налаштовано, діє дефолт Django | борг у §11 |
+| **Idempotency фонових задач** | **унікальне обмеження в БД** на пару «питання + текст, з якого виведено бал» — повторний прохід задачі фізично не може створити другий машинний бал | **ADR-0008** |
+
+**Чому ідемпотентність (властивість «повторний виклик не змінює результат») тут окремим рядком.** Celery
+дає гарантію «принаймні один раз»: якщо воркер помре після запису балів, але до підтвердження задачі
+брокеру, ту саму задачу видадуть удруге. Наявна `update_evaluation_statuses` цього не боїться, бо лише
+перевстановлює статус, — прецеденту в репозиторії немає. Задача оцінювання **створює** рядки, тож
+повторний прохід продублював би бали, а частка збігів у calibration profile порахувалася б по дубльованих
+парах — тобто змінила б дані, які AC-24 забороняє змінювати заднім числом.
+
+**Вхід для стадії `generate-data-model`:** ключем унікальності є пара «питання + текст». Версія AI
+evaluator у ключ **не входить** — переоцінка того самого тексту новою версією моделі PRD не вимагається,
+а AC-24 навпаки вимагає, щоб старі бали лишились недоторканими. Нові бали з'являються лише з новим
+текстом (AC-13), і тоді пара інша.
 
 ## 9. Architecture decisions
 
