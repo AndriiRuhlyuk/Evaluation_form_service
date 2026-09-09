@@ -479,10 +479,25 @@ evaluator у ключ **не входить** — переоцінка того 
 
 | # | Title | Status | Section |
 |---|---|---|---|
-| <NNNN> | <imperative — e.g. "Use sliding window for rate limiting"> | Accepted | §<N> |
-| <NNNN> | <imperative — e.g. "Co-locate outbox worker in API process"> | Accepted | §<N> |
+| 0001 | Виконувати AI-оцінювання у фоновому воркері як окремій поверхні | Accepted | §4 |
+| 0002 | Зберігати AI answer score окремою моделлю з версією evaluator на кожному рядку | Accepted | §4 |
+| 0003 | Матеріалізувати calibration profile інкрементно, а не виводити при відкритті | Accepted | §4 |
+| 0004 | Ввести окремий статус форми «очікує рішення recruiter» перед completion | Accepted | §4 |
+| 0005 | Розмістити фічу в новому застосунку `ai_scoring`, лишивши `evaluation_form` майже незмінним | Accepted | §5 |
+| 0006 | Винести чергу задач оцінювання на окремий інстанс Redis | Accepted | §5 |
+| 0007 | Підключити наявний `prometheus_client` і віддавати метрики для чотирьох NFR | Accepted | §7 |
+| 0008 | Забезпечити ідемпотентність задачі оцінювання унікальним обмеженням у базі | Accepted | §8 |
 
-ADR files live under `docs/features/<slug>/adr/NNNN-<title>.md`.
+ADR files live under `docs/features/ai-answer-scoring-from-transcript/adr/NNNN-<title>.md`.
+
+**Що ADR-ом свідомо не стало.** Склад топ-4 якостей (§1), пін версії Python (§2), склад акторів (§3),
+вибір потоків для посіву (§6) і решта наскрізних конвенцій (§8) лишились inline: жодне з них не набрало
+двох критеріїв із трьох — вони або зворотні за години, або не є контрактом між модулями, або не мають
+чесної альтернативи, бо продиктовані PRD.
+
+**Найбільше рішення документа ADR-ом не стало теж** — розміщення AI evaluator і передача дослівного
+тексту третій стороні винесені у відкрите питання (§11), а відкладене рішення не є ухваленим і ADR не
+породжує.
 
 ## 10. Quality requirements
 
