@@ -6,7 +6,7 @@ updated_at: "2026-09-09"
 feature_size: L
 stage: "04-05"
 ticket: "AI-7"
-target_surfaces: []  # filled in §4 — subset of: backend-service | web-frontend | mobile-app | desktop-app | cli | worker | library-sdk. Read (never re-derived) by api-forge/complete-sequence-diagrams/break-tasks/plan-tests/review-feature → _shared/surfaces.md
+target_surfaces: [backend-service, worker]  # обрано у §4 (ADR-0001). Читається, а не передеривовується, етапами api-forge / complete-sequence-diagrams / break-tasks / plan-tests / review-feature → _shared/surfaces.md
 ---
 
 # Software Architecture Document — AI-оцінка відповідей кандидата з транскрипту
@@ -176,20 +176,50 @@ C4Context
 <!--           наступні стадії. Деривиться з PRD §1 «для кого» + §4 ролей. → _shared/surfaces.md -->
 <!-- 📌 Приклад: «Зберігати урок як таблицю блоків» — стовп, з якого виросло ADR-0001.    -->
 
-**Target surface(s) (the first decision — what's being built):** `<e.g. [backend-service, web-frontend]>`
-<!-- Mirror this list into the frontmatter `target_surfaces`. For each declared UI surface          -->
-<!-- (web-frontend / mobile-app / desktop-app) add a UI-architecture choice below (web → SSR/SPA/   -->
-<!-- hybrid; mobile → native/cross-platform). Multi-surface is usually an ADR (multi-module +       -->
-<!-- irreversible). The UI reuses the repo's existing design system / components / tokens from       -->
-<!-- architecture-map.md §Frontend — it does not design greenfield. → _shared/surfaces.md           -->
+**Target surface(s) (перше рішення — що саме будуємо):** `[backend-service, worker]` → **ADR-0001**
 
-**Top strategic choices (the seeds for ADRs):**
+Бекенд-сервіс несе нові ендпоінти (прикріпити й замінити текст, віддати порівняння, віддати картку,
+позначити незгоду, розібрати питання без людських балів, підтвердити перехід). Фоновий воркер несе
+саме оцінювання: він уже існує в `docker-compose` (сервіси `celery` і `celery-beat`), але зараз тримає
+одну дрібну задачу. Він оголошений **окремою поверхнею**, бо PRD §7 вимагає рахувати доступність
+машинного оцінювання (99.0% на місяць) **окремо від конвеєра** — а окремий показник доступності має
+сенс лише тоді, коли це окремий процес із власним життєвим циклом.
 
-1. **<e.g. Module isolation through events>** — <2-3 sentences rationale referencing Quality Goals and constraints>.
-2. **<e.g. Single-store persistence (Postgres)>** — <2-3 sentences>.
-3. **<e.g. UI-architecture: SPA consuming the backend API>** — <per declared UI surface; 2-3 sentences>.
+`web-frontend` **свідомо не оголошено.** Репозиторій без фронтенду за задумом (`CLAUDE.md`: «No frontend
+here — REST plus one WebSocket channel»), і жодної дизайн-системи, компонентної бібліотеки чи токенів у
+ньому немає. Критерії PRD, написані через «екран порівняння» / «екран картки» / «екран розбору»,
+перевіряються на рівні відповіді API: тест звертається до ендпоінта під конкретною роллю і перевіряє,
+що там рівно те, що ця роль має бачити. Побудова UI — окрема робота поза цим SAD.
 
-Each tactical decision in later sections should be traceable to one of these strategic seeds. Tactical decisions that *contradict* a strategic choice are red flags — surface them in §11 Risks.
+**Top strategic choices (насіння для ADR):**
+
+1. **Машинна оцінка — окрема сутність, паралельна людській** → **ADR-0002**. `AI answer score` не
+   лягає в `EvaluationScore`: він не рахується проти `max score`, не входить в `aggregated decision` і
+   не тримає питання від видалення на completion. Причина не стилістична: `check_and_complete_evaluation()`
+   видаляє питання за умовою `scores__isnull=True`, тож машинний рядок у тій самій таблиці мовчки
+   скасував би AC-18 без жодного рядка коду про це. Версія AI evaluator зберігається полем на кожному
+   машинному балі — це і є механізм AC-24.
+2. **Обробка транскрипту повністю асинхронна і не стоїть у жодному синхронному шляху найму** →
+   **ADR-0001**. Прикріплення тексту лише ставить задачу в чергу; жоден запит користувача не чекає на
+   модель. Це і є QG-1: доступність AI рахується окремо, бо вона й архітектурно окрема, а вимкнення
+   машини не ламає жодного сценарію найму (PRD §7: 100% сценаріїв проходять без тексту).
+3. **Виклик зовнішнього evaluator ізольований в один адаптер** за зразком наявного `PeopleForceService`
+   (`evaluation_form/services.py:129`) — той самий `requests`, той самий шар, та сама форма коду.
+   Таймаут 10 c і одна повторна спроба (PRD §7). **Де саме живе evaluator і чи покриває згода кандидата
+   передачу тексту третій стороні — відкрите питання, рядок у §11**; форма адаптера від відповіді не
+   залежить, а форма контейнера в §5 залежить, тому §5 малює його зовнішнім за чинним PRD §7.
+4. **Calibration profile матеріалізується інкрементно** → **ADR-0003**. Картка зберігається рядком і
+   перераховується у трьох точках: завершення оцінювання, позначка незгоди (AC-09), заміна тексту
+   (AC-13). Це тримає QG-4 (p95 ≤ 800 мс на агрегації без межі росту) і водночас робить AC-24
+   структурно неможливим порушити: вже записана частка не може змінитись від заміни моделі, бо її ніхто
+   не виводить заново.
+5. **Completion стає двофазним через новий статус форми** → **ADR-0004**. Між `IN_PROGRESS` і
+   `COMPLETED` з'являється стан очікування рішення recruiter про текст (AC-19, AC-21). Це найризикованіша
+   зміна документа: вона розрізає навпіл єдине місце системи, де видалення справжнє, а не м'яке, і
+   стосується форм, які фічею взагалі не користуються.
+
+Кожне тактичне рішення нижче має простежуватись до одного з цих стовпів. Тактичне рішення, яке
+**суперечить** стовпу, є червоним прапорцем і виноситься в §11 Risks.
 
 ## 5. Building block view
 
