@@ -68,24 +68,50 @@ profile. Машина не видна до здачі фідбеку всіма,
 <!-- 📋 Що писати: чотири блоки — Технічні / Організаційні / Конвенції / Регуляторні.     -->
 <!-- 📌 Приклад: «Postgres 18» (не «Postgres»); «дедлайн Q3 — жорсткий» (не «бажано»).    -->
 
-**Technical.**
-- <Language + version, e.g. Go 1.26>
-- <Framework + version, e.g. chi v5.1, pgx v5.7>
-- <Datastore + version, e.g. Postgres 18>
-- <Architecture convention, e.g. hexagonal per CLAUDE.md>
+**Technical.** (прочитано з репозиторію — версії з `requirements.txt`, `Dockerfile`, `docker-compose.yaml`)
+
+- **Python 3.12.11** — базовий образ `python:3.12.11-slim` (`Dockerfile:1`). Це runtime, і саме він є
+  обмеженням. Локальна `.venv` — 3.13.2; розбіжність зафіксована рядком у §11.
+- Django 5.2.6 · djangorestframework 3.16.1 · drf-spectacular 0.28.0 · drf-nested-routers 0.95.0 ·
+  djangorestframework_simplejwt 5.5.1 · django-filter 25.1
+- PostgreSQL 16.0-alpine через psycopg 3.2.10
+- Redis (alpine) несе **три ролі одночасно**: channel layer для Channels, Celery broker, result backend
+- Celery 5.5.3 + django-celery-beat 2.8.1 (`DatabaseScheduler`) · Channels 4.3.1 + Daphne 4.2.1 (ASGI)
+- `requests` 2.32.5 — єдиний HTTP-клієнт у репозиторії; зразок вихідної інтеграції — `PeopleForceService`
+  (`evaluation_form/services.py:129`)
+- Шарування: тонкі `views.py` → `services.py` (бізнес-логіка, транзакції, багатомодельні сценарії) →
+  `models.py`; доступ окремо в `permissions.py`
+- Конвеєр стадій: кожна стадія є **копією** попередньої без FK назад (`stage clone`, кореневий CONTEXT.md)
 
 **Organisational.**
-- <Effort budget, e.g. 3 person-weeks>
-- <Deadline, e.g. 2026-Q3 hard>
-- <Team composition, e.g. 1 backend + 0.5 frontend>
+- Жорсткого дедлайну немає. Обмеження є **передумовами запуску** з PRD §12, а не датою: форма згоди
+  кандидата й замір baseline згоди між interviewer мають бути готові до збору першого тексту.
+- Склад: один розробник. Власник — Andrii Rykhliuk, тікет AI-7.
+- Розмір фічі — L (`.size`): 15+ PR, кросмодульна, можливі breaking changes для споживачів.
 
 **Conventions.**
-- <Link to CLAUDE.md or project conventions>
-- <Naming, ID strategy, error-handling pattern>
+- `CLAUDE.md` (корінь) + `.claude/rules/` — правила підвантажуються за шляхом файлу, не всі одразу.
+- Заборонено: мутації у `views.py`/серіалізаторах · `group_send` у `services.py` · голий `.count()` на
+  list-ендпоінтах (є `working_form/utils.py:prefetch_count()`) · багаторядкові мутації без
+  `@transaction.atomic`.
+- `flake8` мусить виходити з **нулем** знахідок — це єдиний надійний сигнал регресії в репо
+  (`setup.cfg`; E203/W503/E501 вимкнені свідомо, max-complexity свідомо не вмикали).
+- `black` з шириною 88. Плагінні гейти: `fields = "__all__"` заборонено; кожен API-клас несе
+  `permission_classes` або `get_permissions()`.
+- Міграції, які git уже відстежує, не редагуються.
 
-**Regulatory / external.**
-- <e.g. GDPR — user deletion behavior per ADR-NNNN>
-- <e.g. SOC2, PCI — applicable controls>
+**Regulatory / external.** (з PRD §8 Security and privacy review)
+- Класифікація даних — **confidential**. Система вперше починає тримати дослівні слова людини, яка не
+  має тут акаунта.
+- Правова підстава — окрема форма згоди кандидата на запис і машинну обробку інтерв'ю. Точна назва й
+  пункт документа встановлюються до запуску (PRD §12, відкрите).
+- Retention: **півроку від дати інтерв'ю** для тексту. Машинні бали, calibration profile і позначки
+  незгоди переживають видалення тексту.
+- Право кандидата на перелік збережених про нього даних — обов'язкове й збирається одним екраном (AC-29).
+- Вердикт огляду безпеки: **потрібен**. Це єдина фіча репозиторію з наслідками поза компанією.
+- PRD §7 уже припускає **зовнішній сервіс оцінювання** (таймаут 10 c, одна повторна спроба) — тобто
+  дослівний текст кандидата залишає периметр компанії. Тут це зафіксовано як факт; рішення, куди саме
+  він їде і на яких умовах, ухвалюється в §4.
 
 ## 3. Context and scope
 
