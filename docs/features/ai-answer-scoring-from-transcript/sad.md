@@ -25,21 +25,38 @@ target_surfaces: []  # filled in §4 — subset of: backend-service | web-fronte
 <!-- 📋 Що писати: 1 абзац intent + 3 рядки топ-3 якості + таблиця stakeholders.        -->
 <!-- 📌 Приклад: «QG-1: швидкість редагування блоку p95 ≤500 мс»                         -->
 
-**Intent.** <One paragraph from PRD §Goals — what we're building and for whom.>
+**Intent.** Фіча дає кожному interviewer другу думку по тих самих відповідях кандидата, виведену
+машиною з дослівного тексту інтерв'ю незалежно від людей, і накопичує з цих розходжень calibration
+profile. Машина не видна до здачі фідбеку всіма, ніколи не входить в aggregated decision і ніколи не
+переписує зданий фідбек. Recruiter дістає видимість розходжень і новий обов'язок: сказати, чи буде
+текст, перш ніж оцінювання замкнеться. Джерело: PRD §2 Goals + §1 Context.
 
-**Top-3 quality goals (1-liners; full scenarios in §10):**
+**Top-4 quality goals (1-liners; full scenarios in §10):**
 
-1. <e.g. "Availability under partial failure of downstream module">
-2. <e.g. "Performance for EM dashboard under team-scale growth">
-3. <e.g. "Recoverability of checkpoints with <30 min RTO">
+1. **Ізольованість конвеєра від збою машинного оцінювання** — жоден сценарій найму не залежить від
+   того, чи працює AI evaluator (PRD §7: 100% сценаріїв найму проходять без тексту інтерв'ю;
+   доступність 99.0% на місяць рахується окремо від конвеєра).
+2. **Незмінність уже виставленого** — машинний бал, пораховане розходження і частка збігів не
+   змінюються ні від зникнення тексту (AC-16), ні від позначки незгоди (AC-10), ні від заміни версії
+   AI evaluator (AC-24).
+3. **Конфіденційність дослівного тексту** — текст читає лише recruiter, interviewer не має до нього
+   жодного шляху (AC-08), і текст зникає сам через півроку від дати інтерв'ю (AC-16).
+4. **Швидкодія читання агрегатів** — calibration profile відкривається за p95 ≤ 800 мс, попри те що
+   вона є підрахунком по всіх завершених оцінюваннях одного interviewer за весь час (PRD §7).
+
+<!-- Чому чотири, а не три: рішення власника 2026-09-09. Швидкодія картки внесена в топ саме тому, -->
+<!-- що вона є агрегацією без природної межі росту і змушує §4/§5 явно вирішити питання             -->
+<!-- денормалізації, а не відкласти його до першої скарги на повільний екран.                       -->
 
 **Stakeholders.**
 
 | Role | Interest | Sign-off owner? |
 |---|---|---|
-| <e.g. IC> | <feature usage> | No |
-| <e.g. EM> | <dashboard reads> | No |
-| <e.g. Tech Lead> | <SAD approval> | Yes |
+| interviewer | Отримує другу думку по своїх балах; його ж і вимірює calibration profile | No |
+| recruiter | Прикріплює й читає transcript, розбирає питання без людських балів, підтверджує перехід у completion, бачить картки всіх interviewer | No |
+| candidate | Його дослівні слова зберігаються півроку; має право дізнатись, що саме система тримає (AC-29) | No |
+| hiring manager | Біль названий у PRD §1, але прав у цьому обсязі не отримує (PRD §3 non-goal) | No |
+| Tech Lead / Architect | Затвердження SAD і ADR | Yes |
 
 <!-- Decision overrides (¶4) — populated by the Step-7 critic resolution loop, empty otherwise.       -->
 <!-- Each: «Decision override: <headline> — rationale: <reason>» so downstream skills see the choice.  -->
