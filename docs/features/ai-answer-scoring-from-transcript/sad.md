@@ -121,28 +121,47 @@ profile. Машина не видна до здачі фідбеку всіма,
 <!-- 📌 Приклад: «зовнішні — нема (свідома відмова від third-party у v1)» — це теж рішення.   -->
 <!-- Кордон довіри (trust boundary) — лінія, за якою ти не довіряєш даним без перевірки.       -->
 
-<Business context in 2-3 sentences. What the system does for whom.>
+Сервіс веде форми оцінювання технічних співбесід: команда наймання будує working form під вакансію,
+а на кожного кандидата створюється заморожена evaluation form зі scores і feedback. Ця фіча додає в
+третю стадію другу думку: recruiter вручну вставляє дослівний transcript, зовнішній AI evaluator
+виводить із нього AI answer score на кожне питання, і система накопичує з розходжень calibration
+profile по кожному interviewer. Кордон довіри (лінія, за якою даним не вірять без перевірки) проходить
+двічі: на вході — вставлений людиною текст, який ніхто не валідував; на виході — відповідь зовнішньої
+моделі, яку не можна пускати ні в aggregated decision, ні в нотатку CRM.
 
-**External systems (in / out):**
+**External actors and systems (in / out):**
 
 | Actor or system | Type | Interaction |
 |---|---|---|
-| <e.g. IC> | Person | Creates goals, adds checkpoints |
-| <e.g. notification-service> | System (internal) | Receives cron registration |
-| <e.g. Identity Provider> | System (external) | Provides JWT tokens |
+| interviewer | Person | Ставить `score` і `feedback`; після здачі всіма читає своє порівняння і власну calibration profile. Transcript не бачить ніколи (AC-08) |
+| recruiter | Person | Вставляє, замінює й читає transcript; розбирає питання без людських балів; підтверджує перехід у completion; читає картки всіх interviewer; запускає CRM sync |
+| candidate | Person (external) | Акаунта в системі не має. Його дослівні слова зберігаються півроку; письмовий запит про власні дані надходить **поза системою** і обслуговується recruiter'ом (AC-29) |
+| AI evaluator service | System (external) | **Новий залежник.** Отримує текст і питання, повертає бал 0-3 з цитатою й номером рядка. Таймаут 10 c, одна повторна спроба (PRD §7) |
+| PeopleForce | System (external) | Наявний. Отримує нотатку з aggregated decision і посиланням на звіт; машинного бала в нотатці немає (AC-27) |
+
+`hiring manager` у діаграмі відсутній свідомо: PRD §3 називає видимість для нього non-goal, тож у цьому
+обсязі він із фічею не взаємодіє.
 
 **C4 Context (L1):**
 
 ```mermaid
 C4Context
-    title <system> — System Context
+    title AI-оцінка відповідей з транскрипту — System Context
 
-    Person(user, "<User>", "<role + intent>")
-    System(system, "<Our System>", "<one-sentence description>")
-    System_Ext(ext, "<External system>", "<one-sentence description>")
+    Person(interviewer, "Interviewer", "Ставить score і feedback; читає власне порівняння і власну calibration profile")
+    Person(recruiter, "Recruiter", "Вставляє і читає transcript, розбирає питання без людських балів, підтверджує completion")
+    Person_Ext(candidate, "Candidate", "Акаунта не має; його дослівні слова зберігаються півроку від дати інтерв'ю")
 
-    Rel(user, system, "<interaction>", "<protocol>")
-    Rel(system, ext, "<interaction>", "<protocol>")
+    System(efs, "evaluation_form_service", "Конвеєр форм оцінювання; зберігає transcript, тримає AI answer score і calibration profile")
+
+    System_Ext(evaluator, "AI evaluator service", "Зовнішній сервіс оцінювання: за transcript і питанням повертає бал 0-3 з цитатою")
+    System_Ext(pf, "PeopleForce", "CRM: картка кандидата, куди публікується нотатка з aggregated decision")
+
+    Rel(interviewer, efs, "Ставить score і feedback; читає порівняння після здачі всіма", "HTTPS")
+    Rel(recruiter, efs, "Вставляє transcript вручну, розбирає, підтверджує completion", "HTTPS")
+    Rel(candidate, recruiter, "Письмовий запит про власні збережені дані", "поза системою")
+    Rel(efs, evaluator, "Надсилає текст і питання, отримує бал з цитатою", "HTTPS, таймаут 10 c")
+    Rel(efs, pf, "Публікує нотатку без машинного бала", "HTTPS")
 ```
 
 ## 4. Solution strategy
