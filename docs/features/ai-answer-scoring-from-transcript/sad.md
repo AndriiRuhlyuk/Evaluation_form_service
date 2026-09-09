@@ -233,40 +233,81 @@ here — REST plus one WebSocket channel»), і жодної дизайн-сис
 <!--           лише приклад однієї поверхні; додай/заміни під оголошене у §4. → _shared/surfaces.md -->
 <!-- 📌 Приклад: «web-app, content-api, media-worker, postgres, s3, cdn».                -->
 
-<One paragraph: layered / hexagonal / clean / event-driven. Why.>
+Стиль **шаровий**, успадкований від репозиторію без відхилень: тонкі `views.py` (авторизація,
+пагінація, серіалізація) → `services.py` (бізнес-логіка, транзакції, багатомодельні сценарії) →
+`models.py` (ORM, валідатори). Доступ живе окремо в `permissions.py`. Гексагональну чи чисту архітектуру
+тут не вводимо: PRD не сигналізує потреби відхилятись, а розходження з конвенцією репозиторію коштувало б
+дорожче за будь-яку вигоду.
+
+Код фічі живе в **новому Django-застосунку `ai_scoring`** (**ADR-0005**). Наявний `evaluation_form`
+змінюється рівно двічі — і жодного разу більше.
 
 **Internal decomposition:**
 
 ```
-<e.g. internal/modules/goals/>
-├── domain/       <entities + sentinel errors>
-├── app/          <use cases / services>
-├── infra/        <repository + outbox impl>
-├── ports/        <HTTP handlers, DTOs, error mapping>
-└── module.go     <self-wiring>
+ai_scoring/                  новий застосунок: усе, чого до фічі не існувало
+├── models.py                Transcript · AIAnswerScore · DisagreementFlag · CalibrationProfile
+├── evaluator.py             адаптер до зовнішнього AI evaluator, за формою PeopleForceService
+├── services.py              оцінювання, перерахунок картки, розбір питань без людських балів
+├── tasks.py                 Celery: оцінити транскрипт · видалити прострочені тексти · нагадати recruiter
+├── permissions.py           транскрипт лише recruiter · картка лише власна · бали лише після здачі всіма
+├── serializers.py
+├── views.py                 тонкі ендпоінти
+├── urls.py
+└── migrations/
+
+evaluation_form/             зміни в наявному застосунку - рівно дві
+├── models.py                + нове значення Status (ADR-0004)
+└── services.py              check_and_complete_evaluation() розрізається надвоє: «усі здали» окремо
+                             від «замкнути й видалити невідповідані питання»
 ```
 
-**C4 Container (L2):**
+**C4 Container (L2):** контейнери відповідають **запускним одиницям**, а не Django-застосункам: один
+контейнер на кожну оголошену поверхню (`backend-service` → HTTP API, `worker` → Celery-виконавець) плюс
+планувальник, який уже є в `docker-compose`.
 
 ```mermaid
 C4Container
-    title <system> — Containers
+    title AI-оцінка відповідей з транскрипту — Containers
 
-    Person(user, "<User>")
+    Person(interviewer, "Interviewer")
+    Person(recruiter, "Recruiter")
 
-    Container_Boundary(boundary, "<Our System>") {
-        Container(web, "<Web/API container>", "<technology>", "<purpose>")
-        Container(svc, "<Service container>", "<technology>", "<purpose>")
-        ContainerDb(db, "<DB>", "<technology>", "<purpose>")
+    Container_Boundary(efs, "evaluation_form_service") {
+        Container(api, "HTTP API", "Django 5.2.6 + DRF 3.16.1 на Daphne", "Ендпоінти транскрипту, порівняння, картки, розбору й підтвердження переходу")
+        Container(worker, "Scoring worker", "Celery 5.5.3", "Оцінює транскрипт через evaluator, перераховує картки, видаляє прострочені тексти")
+        Container(beat, "Scheduler", "django-celery-beat 2.8.1", "Ставить періодичні задачі: чистка текстів старших за півроку, нагадування recruiter")
     }
 
-    System_Ext(ext, "<External>", "<purpose>")
+    ContainerDb(pg, "PostgreSQL 16", "psycopg 3.2.10", "transcript, ai_answer_score, disagreement_flag, calibration_profile + наявні таблиці конвеєра")
+    ContainerQueue(broker, "Redis - task broker", "Celery broker, окремий інстанс", "Черга задач оцінювання і періодичних задач фічі")
+    ContainerQueue(chlayer, "Redis - channel layer", "channels_redis, наявний інстанс", "Канали реального часу working form; фіча ним не користується")
 
-    Rel(user, web, "<interaction>", "<protocol>")
-    Rel(web, svc, "<service calls>")
-    Rel(svc, db, "<reads/writes>", "<driver>")
-    Rel(svc, ext, "<emits>", "<protocol>")
+    System_Ext(evaluator, "AI evaluator service", "Зовнішній сервіс оцінювання")
+    System_Ext(pf, "PeopleForce", "CRM: картка кандидата")
+
+    Rel(interviewer, api, "Читає порівняння і власну картку", "HTTPS")
+    Rel(recruiter, api, "Вставляє транскрипт, розбирає питання, підтверджує перехід", "HTTPS")
+    Rel(api, pg, "Читає і пише", "psycopg 3")
+    Rel(api, broker, "Ставить задачу оцінювання після прикріплення тексту", "Celery")
+    Rel(api, chlayer, "Мовлення working form - наявна поведінка, фічею не зачеплена", "channels_redis")
+    Rel(beat, broker, "Ставить періодичні задачі", "Celery")
+    Rel(worker, broker, "Забирає задачі", "Celery")
+    Rel(worker, pg, "Пише машинні бали, оновлює картки, видаляє прострочені тексти", "psycopg 3")
+    Rel(worker, evaluator, "Надсилає текст і питання, отримує бал з цитатою", "HTTPS, таймаут 10 c")
+    Rel(api, pf, "Публікує нотатку без машинного бала", "HTTPS")
 ```
+
+**Два Redis замість одного — свідоме рішення фічі** (**ADR-0006**). Сьогодні один інстанс несе три ролі
+(канали реального часу, брокер Celery, сховище результатів) — це зафіксовано в §2 як стан репозиторію.
+Фіча вводить довгі задачі, кожна з яких чекає до 10 секунд на зовнішню модель, тому черга оцінювання
+переїжджає на **окремий інстанс**: сплеск оцінювань не має гальмувати спільне редагування working form.
+Логічної бази всередині того самого процесу для цього замало — вона розділяє простір ключів, але не
+процесорний час і не пам'ять.
+
+**Що навмисно не намальовано.** Розміщення `AI evaluator service` показано зовнішнім за чинним PRD §7;
+якщо відкрите питання в §11 закриється відповіддю «самохост», цей елемент перестане бути `System_Ext` і
+переїде всередину межі. Це єдина частина діаграми, яку може змінити невирішене питання.
 
 ## 6. Runtime view
 
