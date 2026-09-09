@@ -321,25 +321,67 @@ C4Container
 <!--           кожним §5 AC — без обмеження. Не намагайся покрити все тут.                  -->
 <!-- 📌 Приклад: «methodist → web-app: складає чорновик → web-app → content-api: зберегти». -->
 
-**Critical flow 1: <flow name>**
+Учасники беруться **дослівно з §5** — нових вигадувати не можна. Повідомлення семантичні: жодних
+HTTP-методів, шляхів і кодів відповіді — вони з'являться на стадії `api-forge`.
+
+**Critical flow 1: прикріплення тексту й поява машинних балів (happy path)**
 
 ```mermaid
 sequenceDiagram
-    actor User
-    participant API
-    participant Service
-    participant DB
-    User->>API: <request>
-    API->>Service: <call>
-    Service->>DB: <write tx>
-    DB-->>Service: ok
-    Service-->>API: result
-    API-->>User: 201
+    actor Recruiter
+    participant API as HTTP API
+    participant Broker as Redis task broker
+    participant Worker as Scoring worker
+    participant Evaluator as AI evaluator service
+    participant DB as PostgreSQL
+
+    Recruiter->>API: Прикріплює дослівний текст інтерв'ю
+    API->>API: Перевіряє, що в тексті видно, де чиї репліки
+    API->>DB: Зберігає transcript
+    API->>Broker: Ставить задачу оцінювання
+    API-->>Recruiter: Підтвердження, бали зʼявляться протягом години
+    Worker->>Broker: Забирає задачу
+    Worker->>DB: Читає питання форми і текст
+    loop На кожне питання форми
+        Worker->>Evaluator: Надсилає текст і питання
+        Evaluator-->>Worker: Бал 0-3, цитата, номер рядка
+    end
+    Worker->>DB: Пише машинні бали разом з версією AI evaluator
+    Note over Worker,DB: Питання, на яке відповіді не знайдено, лишається без бала і позначається як не знайдене, а не нулем
 ```
 
-<!-- For XS/S: 1 flow above is enough. For M+: add 2-4 more (e.g. failure-mode flow, async flow). -->
+**Critical flow 2: збій зовнішнього evaluator (failure mode)**
 
-**Critical flow 2: <e.g. async event propagation>** — <if applicable, otherwise N/A>.
+```mermaid
+sequenceDiagram
+    participant Worker as Scoring worker
+    participant Evaluator as AI evaluator service
+    participant DB as PostgreSQL
+    actor Interviewer
+    participant API as HTTP API
+
+    Worker->>Evaluator: Надсилає текст і питання
+    alt Відповідь у межах 10 секунд
+        Evaluator-->>Worker: Бал 0-3, цитата, номер рядка
+        Worker->>DB: Пише машинний бал з версією AI evaluator
+    else Таймаут або помилка
+        Worker->>Evaluator: Одна повторна спроба
+        alt Повтор удався
+            Evaluator-->>Worker: Бал 0-3, цитата, номер рядка
+            Worker->>DB: Пише машинний бал з версією AI evaluator
+        else Повтор теж не вдався
+            Worker->>DB: Бала немає, питання лишається без машинної оцінки
+            Note over Worker,DB: Статус форми не змінюється, людські бали і зданий фідбек не зачеплені
+        end
+    end
+    Interviewer->>API: Відкриває своє оцінювання
+    API->>DB: Читає людські бали і ті машинні, що є
+    API-->>Interviewer: Форма поводиться як до появи фічі, порівняння показує лише знайдені відповіді
+```
+
+<!-- Посів. Стадія complete-sequence-diagrams доповнює §6 кожним критичним потоком і кожним §5 AC -->
+<!-- без обмеження: двофазний completion, розбір питань без людських балів, заміна чужого тексту,  -->
+<!-- оцінювання копією оцінювання, автовидалення тексту через півроку.                             -->
 
 ## 7. Deployment view
 
